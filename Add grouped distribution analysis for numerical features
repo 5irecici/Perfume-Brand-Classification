@@ -1,0 +1,64 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from google.colab import drive
+
+# --- 1. ORTAM HAZIRLIĞI VE VERİ YÜKLEME ---
+drive.mount('/content/drive')
+path = '/content/drive/MyDrive/fra_cleaned.csv'
+
+# RENK PALETİ (Grafikler için tutarlı ve profesyonel renkler)
+PALETTE = ['#2E8B57', '#3CB371', '#20B2AA', '#4682B4', '#6A5ACD',
+           '#7B68EE', '#483D8B', '#5F9EA0', '#87CEEB', '#B0C4DE']
+
+try:
+    # Veri yükleme
+    data = pd.read_csv(path, sep=';', encoding='latin-1')
+    print("✅ 1. ADIM: Veri başarıyla yüklendi!")
+
+    # --- 2. VERİ SETİNİ İLK 10 MARKA İLE SINIRLANDIRMA ---
+    brand_counts = data['Brand'].value_counts()
+    top_10_list = brand_counts.head(10).index.tolist()
+    data_filtered = data[data['Brand'].isin(top_10_list)].copy()
+
+    print(f"✅ 2. ADIM: Veri seti en çok parfüme sahip ilk 10 markaya filtrelendi. Satır Sayısı: {len(data_filtered)}")
+
+    # --- 3. ÖN İŞLEME VE DAĞILIM ANALİZİ İÇİN HAZIRLIK ---
+    # String tipindeki rating değerlerini float'a çeviriyoruz
+    if data_filtered['Rating Value'].dtype == 'object':
+        data_filtered['Rating Value'] = data_filtered['Rating Value'].str.replace(',', '.').astype(float)
+
+    # Analiz edeceğimiz sayısal değişkenler
+    num_cols = ['Rating Value', 'Rating Count', 'Year']
+
+    # --- 4. SAYISAL ÖZELLİKLERİN DAĞILIM GRAFİKLERİ ---
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    axes = axes.flatten()
+
+    for i, col in enumerate(num_cols):
+        # Seçilen ilk 10 markaya göre döngü kurup dağılımı inceliyoruz
+        for brand, color in zip(top_10_list[:len(axes)], PALETTE):
+            subset = data_filtered[data_filtered['Brand'] == brand][col].dropna()
+            if not subset.empty:
+                axes[i].hist(subset, bins=15, alpha=0.6, color=color, label=brand, edgecolor='white')
+
+        axes[i].set_title(col, fontweight='bold', fontsize=11)
+        axes[i].set_xlabel('Değer', fontsize=9)
+        axes[i].set_ylabel('Frekans', fontsize=9)
+        axes[i].legend(fontsize=7, loc='upper right')
+        axes[i].grid(axis='y', linestyle='--', alpha=0.3)
+
+    plt.suptitle('Sayısal Özellik Dağılımları (Markalara Göre)', fontsize=14, fontweight='bold', y=1.05)
+    plt.tight_layout()
+    plt.show()
+
+    # --- 5. TEKNİK ANALİZ RAPORU ---
+    print('─── Teknik Değerlendirme ───')
+    print('📌 Rating Count ve Year gibi değişkenler farklı markalar bazında değişkenlik gösterir.')
+    print('📌 Özellikle rating değerleri markalara göre sağa veya sola çarpık bir yapı sergileyebilir.')
+
+except FileNotFoundError:
+    print("❌ Hata: Dosya belirtilen yolda bulunamadı. Lütfen yolu kontrol edin.")
+except Exception as e:
+    print(f"❌ Bir hata oluştu: {e}")
