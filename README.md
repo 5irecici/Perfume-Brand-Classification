@@ -22,5 +22,7 @@ An analysis of the Brand target variable revealed a classic power-law distributi
 # Target Variable Profiling & Imbalance Strategy:
 Post-filtering, the dataset comprises the 10 most prominent perfume brands. A detailed distribution analysis (utilizing customized bar and pie charts) was conducted on this refined subset. The calculated class imbalance ratio highlighted the underlying distribution gaps, guiding the strategic decision to incorporate class balancing techniques (e.g., SMOTE) into the subsequent machine learning pipeline to ensure fair and unbiased predictions across all brands.
 
+# Numerical Distribution & Feature Variance:
+To understand the underlying structure of the numerical data, a grouped distribution analysis was performed on the Top 10 brands. By plotting histograms for metrics such as User Ratings, Vote Counts, and Release Years, we observed class-specific variances and skewness. This granular level of EDA confirmed the need for appropriate feature scaling and standardization techniques to ensure the classification algorithms treat all numerical inputs fairly.
 
 
