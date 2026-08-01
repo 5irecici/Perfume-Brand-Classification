@@ -39,3 +39,6 @@ Even within the Top 10 brands, the dataset exhibited varying frequencies. To ens
 
 # Feature Selection & Correlation Analysis:
 To optimize model performance and avoid the curse of dimensionality, a rigorous Pearson correlation analysis was conducted on the training subset. A heatmap was utilized to monitor feature collinearity, while target correlations were evaluated to identify the most predictive attributes. Features demonstrating an absolute correlation coefficient greater than the defined threshold (∣r∣>0.05) were flagged as significant inputs, guiding the feature selection process for the classifiers.
+
+# Multicollinearity Prevention & Feature Elimination:
+To construct a robust predictive model, it is vital to eliminate redundant features that carry overlapping information. A Pearson correlation matrix was computed to assess inter-feature relationships. An automated threshold mechanism was established to identify highly correlated independent variable pairs (∣r∣>0.90). By systematically dropping one feature from each highly correlated pair, the pipeline successfully mitigates the risk of multicollinearity. This dimensionality reduction step enhances both the computational efficiency and the interpretability of the final classifiers.
