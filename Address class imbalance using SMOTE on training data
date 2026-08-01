@@ -1,0 +1,124 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.model_selection import train_test_split
+from imblearn.over_sampling import SMOTE
+from google.colab import drive
+
+# --- 1. ORTAM HAZIRLIĞI VE VERİ YÜKLEME ---
+drive.mount('/content/drive')
+path = '/content/drive/MyDrive/fra_cleaned.csv'
+
+# RENK PALETİ
+PALETTE = ['#2E8B57', '#3CB371', '#20B2AA', '#4682B4', '#6A5ACD',
+           '#7B68EE', '#483D8B', '#5F9EA0', '#87CEEB', '#B0C4DE']
+
+try:
+    # Veriyi yükleme
+    data_raw = pd.read_csv(path, sep=';', encoding='latin-1')
+    print("✅ 1. ADIM: Veri başarıyla yüklendi!")
+
+    # --- 2. VERİ SETİNİ İLK 10 MARKA İLE SINIRLANDIRMA ---
+    brand_counts = data_raw['Brand'].value_counts()
+    top_10_list = brand_counts.head(10).index.tolist()
+    data_filtered = data_raw[data_raw['Brand'].isin(top_10_list)].copy()
+
+    print(f"✅ 2. ADIM: Veri seti ilk 10 markaya filtrelendi. Satır Sayısı: {len(data_filtered)}")
+
+    # --- 3. ÖN İŞLEME: SAYISAL DÖNÜŞÜMLER ---
+    if data_filtered['Rating Value'].dtype == 'object':
+        data_filtered['Rating Value'] = data_filtered['Rating Value'].str.replace(',', '.').astype(float)
+
+    # --- 4. KOPYALAMA VE EKSİK DEĞERLERİN DOLDURULMASI ---
+    df = data_filtered.copy()
+
+    # Kategorik sütunları mod ile doldurma
+    cat_cols = df.select_dtypes('object').columns.tolist()
+    for col in cat_cols:
+        if not df[col].mode().empty:
+            df[col] = df[col].fillna(df[col].mode()[0])
+
+    # Sayısal sütunları medyan ile doldurma
+    num_cols = df.select_dtypes(include=[np.number]).columns
+    for col in num_cols:
+        df[col] = df[col].fillna(df[col].median())
+
+    print('Eksik değer kaldı mı:', df.isnull().sum().sum())
+
+    # --- 5. HEDEF DEĞİŞKENİNİ ENCODE ETME ---
+    le_brand = LabelEncoder()
+    df['Brand_Encoded'] = le_brand.fit_transform(df['Brand'])
+
+    # --- 6. KATEGORİK ÖZELLİKLERİ ENCODE ETME ---
+    feature_cols = [c for c in df.columns if c not in ['Brand', 'Brand_Encoded']]
+    le_features = LabelEncoder()
+
+    for col in df[feature_cols].select_dtypes('object').columns:
+        df[col] = le_features.fit_transform(df[col].astype(str))
+
+    X = df[feature_cols]
+    y = df['Brand_Encoded']
+
+    print(f'\n🚀 ÖZELLİK MATRİSLERİ OLUŞTURULDU')
+    print(f'X boyutu : {X.shape}')
+    print(f'Sınıf (Marka) Sayısı: {len(np.unique(y))}')
+
+    # --- 7. TRAIN / TEST AYRIMI ---
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.20, random_state=42, stratify=y
+    )
+
+    print(f'\n🚀 TRAIN / TEST AYRIMI TAMAMLANDI')
+    print(f'Eğitim Seti Boyutu : {X_train.shape[0]:,} örnek')
+    print(f'Test Seti Boyutu   : {X_test.shape[0]:,} örnek')
+
+    # --- 8. STANDARDIZASYON ---
+    scaler = StandardScaler()
+    X_train_sc = scaler.fit_transform(X_train)
+    X_test_sc  = scaler.transform(X_test)
+
+    print('\n🚀 ÖLÇEKLEME TAMAMLANDI')
+
+    # --- 9. SMOTE UYGULAMASI (Yalnızca Eğitim Setine) ---
+    smote = SMOTE(random_state=42)
+    X_train_sm, y_train_sm = smote.fit_resample(X_train_sc, y_train)
+
+    # Sınıf dağılımını hesaplama
+    unique_classes, counts_before = np.unique(y_train, return_counts=True)
+    _, counts_after = np.unique(y_train_sm, return_counts=True)
+
+    print('\n─── SMOTE Öncesi / Sonrası Sınıf Dağılımı ───')
+    df_smote_comp = pd.DataFrame({
+        'Sınıf Kodu': unique_classes,
+        'SMOTE Öncesi': counts_before,
+        'SMOTE Sonrası': counts_after
+    })
+    display(df_smote_comp.set_index('Sınıf Kodu'))
+
+    # Görsel Karşılaştırma
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    for ax, data_y, title in zip(axes, [y_train, y_train_sm], ['SMOTE Öncesi (Eğitim)', 'SMOTE Sonrası (Eğitim)']):
+        vals = pd.Series(data_y).value_counts().sort_index()
+        bars = ax.bar(vals.index, vals.values, color=PALETTE[:len(vals)], edgecolor='white', width=0.6)
+
+        for bar, v in zip(bars, vals.values):
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 20,
+                    f'{v:,}', ha='center', fontsize=9, fontweight='bold')
+
+        ax.set_title(title, fontsize=12, fontweight='bold')
+        ax.set_xlabel('Marka Sınıfları')
+        ax.set_ylabel('Örnek Sayısı')
+        ax.set_ylim(0, max(vals.values) * 1.25)
+        ax.grid(axis='y', linestyle='--', alpha=0.3)
+
+    plt.suptitle('SMOTE Sonrası Sınıf Dengesizliğinin Giderilmesi', fontsize=14, fontweight='bold', y=1.05)
+    plt.tight_layout()
+    plt.show()
+
+except FileNotFoundError:
+    print("❌ Hata: Dosya belirtilen yolda bulunamadı. Lütfen yolu kontrol edin.")
+except Exception as e:
+    print(f"❌ Bir hata oluştu: {e}")
