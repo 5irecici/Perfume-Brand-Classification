@@ -1,0 +1,60 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from google.colab import drive
+
+# --- 1. ORTAM HAZIRLIĞI VE VERİ YÜKLEME ---
+drive.mount('/content/drive')
+path = '/content/drive/MyDrive/fra_cleaned.csv'
+
+# RENK PALETİ (Grafikler için tutarlı renkler)
+PALETTE = ['#2E8B57', '#3CB371', '#20B2AA', '#4682B4', '#6A5ACD',
+           '#7B68EE', '#483D8B', '#5F9EA0', '#87CEEB', '#B0C4DE']
+
+try:
+    # Veri yükleme
+    data = pd.read_csv(path, sep=';', encoding='latin-1')
+    print("✅ 1. ADIM: Veri başarıyla yüklendi!")
+
+    # --- 3. VERİ SETİNİ TOP 10 MARKA İLE SINIRLANDIRMA ---
+    top_10_list = brand_counts.head(10).index.tolist()
+    data_filtered = data[data['Brand'].isin(top_10_list)].copy()
+
+    # --- 4. FİLTRELENMİŞ VERİ ÜZERİNDE SINIF DAĞILIMI ANALİZİ ---
+    class_counts = data_filtered['Brand'].value_counts()
+    class_pct = data_filtered['Brand'].value_counts(normalize=True) * 100
+
+    fig, axes = plt.subplots(1, 2, figsize=(16, 5))
+
+    # A. Çubuk Grafik
+    axes[0].bar(class_counts.index, class_counts.values,
+                color=PALETTE[:len(class_counts)], edgecolor='white', linewidth=1.5, width=0.6)
+    for i, (v, p) in enumerate(zip(class_counts.values, class_pct.values)):
+        axes[0].text(i, v + 20, f'{v:,}\n({p:.1f}%)', ha='center', fontsize=9, fontweight='bold')
+
+    axes[0].set_title('Filtrelenmiş Sınıf Dağılımı (Top 10 Marka)', fontsize=13, fontweight='bold')
+    axes[0].set_ylabel('Örnek Sayısı', fontsize=10)
+    axes[0].set_xticklabels(class_counts.index, rotation=90)
+    axes[0].set_ylim(0, max(class_counts.values) * 1.2)
+
+    # B. Pasta Grafik
+    axes[1].pie(class_counts.values, labels=class_counts.index,
+                colors=PALETTE[:len(class_counts)], autopct='%1.1f%%', startangle=90,
+                wedgeprops={'edgecolor': 'white', 'linewidth': 2},
+                textprops={'fontsize': 9, 'fontweight': 'bold'})
+    axes[1].set_title('Filtrelenmiş Sınıf Oranı', fontsize=13, fontweight='bold')
+
+    plt.suptitle('Hedef Değişken (Brand) Filtrelenmiş Dağılımı', fontsize=15, fontweight='bold', y=1.05)
+    plt.tight_layout()
+    plt.show()
+
+    imb_ratio = class_counts.max() / class_counts.min()
+    print(f'\n📌 Dengesizlik oranı: {imb_ratio:.2f}:1 → (Gerekirse SMOTE/Dengeleme uygulanabilir)')
+
+    # Filtrelenmiş ve hazır veri setinin boyutu
+    print(f"📌 Filtreleme Sonrası Satır Sayısı: {len(data_filtered)}")
+    display(data_filtered.head())
+
+except Exception as e:
+    print(f"❌ Bir hata oluştu: {e}")
