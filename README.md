@@ -25,4 +25,5 @@ Post-filtering, the dataset comprises the 10 most prominent perfume brands. A de
 # Numerical Distribution & Feature Variance:
 To understand the underlying structure of the numerical data, a grouped distribution analysis was performed on the Top 10 brands. By plotting histograms for metrics such as User Ratings, Vote Counts, and Release Years, we observed class-specific variances and skewness. This granular level of EDA confirmed the need for appropriate feature scaling and standardization techniques to ensure the classification algorithms treat all numerical inputs fairly.
 
-
+# Data Preprocessing & Encoding Pipeline:
+To ensure compatibility with machine learning classifiers, a robust preprocessing pipeline was implemented. Missing data was handled using appropriate imputation strategies based on data types (median for numericals, mode for categoricals). Additionally, since algorithms require numerical inputs, all categorical text features and the target variable were mapped to integer values using LabelEncoder. This resulted in a fully optimized feature space (X) and target array (y).
