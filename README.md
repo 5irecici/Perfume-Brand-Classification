@@ -31,6 +31,7 @@ To ensure compatibility with machine learning classifiers, a robust preprocessin
 # Data Preprocessing & Splitting Strategy:
 The preprocessing pipeline handles missing records systematically (median for numericals, mode for categoricals) and maps text features to integers using LabelEncoder. To establish a reliable evaluation framework, the fully numeric feature space (X) and target array (y) are divided using a Stratified Train-Test Split (80/20). Stratification guarantees that the proportion of each perfume brand remains identical in both the training and testing phases, mitigating the risks associated with the remaining class imbalance.
 
-
+# Feature Scaling & Leakage Prevention:
+Before feeding the data into classification algorithms, the feature matrices were normalized using Standard Scaling. A strict boundary was maintained between the training and testing sets to prevent data leakage. The scaler was fitted exclusively on the training subset, ensuring that the test set remains completely unseen and acts as a true benchmark for model evaluation.
 
 
