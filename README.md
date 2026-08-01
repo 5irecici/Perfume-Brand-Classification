@@ -9,3 +9,6 @@ The dataset is loaded using the latin-1 encoding and a semicolon (;) separator t
 
 # Data Quality & Missing Value Handling
 Upon loading the dataset, a comprehensive missing value analysis is conducted. Attributes with missing records are identified and visualized as percentages. This step is crucial for determining which imputation methods (e.g., mode for categorical text like 'Notes', median for numerical columns) will be applied before training the classification models.
+
+# Exploratory Data Analysis (EDA):
+Initial data exploration is performed to uncover the underlying structure of the dataset. Categorical and numerical summaries are extracted, highlighting the most dominant brands and the general user rating distribution. This analysis plays a vital role in understanding the long-tail distribution of the brands before filtering the dataset for the classification models.
