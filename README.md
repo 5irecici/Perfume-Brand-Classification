@@ -27,3 +27,10 @@ To understand the underlying structure of the numerical data, a grouped distribu
 
 # Data Preprocessing & Encoding Pipeline:
 To ensure compatibility with machine learning classifiers, a robust preprocessing pipeline was implemented. Missing data was handled using appropriate imputation strategies based on data types (median for numericals, mode for categoricals). Additionally, since algorithms require numerical inputs, all categorical text features and the target variable were mapped to integer values using LabelEncoder. This resulted in a fully optimized feature space (X) and target array (y).
+
+# Data Preprocessing & Splitting Strategy:
+The preprocessing pipeline handles missing records systematically (median for numericals, mode for categoricals) and maps text features to integers using LabelEncoder. To establish a reliable evaluation framework, the fully numeric feature space (X) and target array (y) are divided using a Stratified Train-Test Split (80/20). Stratification guarantees that the proportion of each perfume brand remains identical in both the training and testing phases, mitigating the risks associated with the remaining class imbalance.
+
+
+
+
