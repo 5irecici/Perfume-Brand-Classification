@@ -1,0 +1,52 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import scipy as sp
+from sklearn.model_selection import train_test_split
+from imblearn.over_sampling import SMOTE
+from sklearn.feature_selection import VarianceThreshold
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, AdaBoostClassifier
+from sklearn import svm
+from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
+from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    roc_auc_score,
+    confusion_matrix,
+    classification_report,
+    ConfusionMatrixDisplay,
+    RocCurveDisplay,
+    PrecisionRecallDisplay,
+    roc_curve,
+    precision_recall_curve
+)
+
+#1. ortam hazırlığı
+from google.colab import drive
+drive.mount('/content/drive')
+
+
+# 1. Drive Bağlantısı
+drive.mount('/content/drive')
+
+# 2. Veri Yükleme (Hata Giderilmiş Hali)
+# NOT: Dosyanın Drive içindeki yolunu sol panelden sağ tıklayıp "Yolu kopyala" yaparak buraya yapıştır.
+path = '/content/drive/MyDrive/fra_cleaned.csv'
+
+try:
+    # sep=';' -> Dosyan noktalı virgül ile ayrıldığı için bu ŞART.
+    # encoding='latin-1' -> Özel karakterleri (accented letters) okumak için en güvenlisidir.
+    data = pd.read_csv(path, sep=';', encoding='latin-1')
+
+    print("✅ Veri başarıyla yüklendi!")
+    print(f"Veri Boyutu: {data.shape}")
+    display(data.head())
+
+except FileNotFoundError:
+    print("❌ Hata: Dosya Drive içerisinde bulunamadı. Lütfen sol taraftaki 'Files' kısmından yolu kopyalayıp 'path' değişkenine yapıştırın.")
+except Exception as e:
+    print(f"❌ Beklenmedik bir hata oluştu: {e}")
+
