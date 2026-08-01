@@ -1,0 +1,55 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from google.colab import drive
+
+# --- 1. ORTAM HAZIRLIĞI VE VERİ YÜKLEME ---
+drive.mount('/content/drive')
+path = '/content/drive/MyDrive/fra_cleaned.csv'
+
+try:
+    data = pd.read_csv(path, sep=';', encoding='latin-1')
+    print("✅ 1. ADIM: Veri başarıyla yüklendi!")
+
+    # --- 2. UZUN KUYRUK (LONG TAIL) ANALİZİ VE GÖRSELLEŞTİRME ---
+    brand_counts = data['Brand'].value_counts()
+
+    plt.figure(figsize=(16, 7))
+    x_indices = range(len(brand_counts))
+
+    # Tüm markaların dağılımı (Mavi Alan - Long Tail)
+    plt.fill_between(x_indices, brand_counts.values, color='skyblue', alpha=0.4, label='Gürültülü Markalar (Uzun Kuyruk)')
+    plt.plot(x_indices, brand_counts.values, color='dodgerblue', lw=2)
+
+    # Seçilen Top 10 markanın vurgulanması (Yeşil Alan)
+    plt.fill_between(x_indices[:10], brand_counts.values[:10], color='forestgreen', alpha=0.6, label='Seçilen Top 10 Marka (Yeterli Örneklem)')
+
+    # Uzun kuyruk açıklaması
+    plt.annotate('Uzun Kuyruk (Long Tail):\nDüşük Temsil Gücü ve\nUnderfitting Riski',
+                 xy=(len(brand_counts)//2, 5), xytext=(len(brand_counts)//2 + 100, 150),
+                 arrowprops=dict(facecolor='black', shrink=0.05, width=1, headwidth=8),
+                 fontsize=12, fontweight='bold', color='darkred')
+
+    plt.title('Sınıf Dengesi ve Uzun Kuyruk (Long Tail) Problemi', fontsize=16, fontweight='bold', pad=15)
+    plt.xlabel('Marka Sıralaması (Popülerlik Sırasına Göre)', fontsize=12)
+    plt.ylabel('Parfüm Sayısı (Örnek Sayısı)', fontsize=12)
+    plt.legend(fontsize=11)
+    plt.grid(axis='y', linestyle='--', alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+    # --- 3. VERİ SETİNİ TOP 10 MARKA İLE SINIRLANDIRMA ---
+    top_10_list = brand_counts.head(10).index.tolist()
+    data_filtered = data[data['Brand'].isin(top_10_list)].copy()
+
+    print(f"\n--- TEKNİK ANALİZ RAPORU ---")
+    print(f"📌 Ham Verideki Toplam Marka Sayısı: {len(brand_counts)}")
+    print(f"📌 Filtreleme Sonrası Satır Sayısı: {len(data_filtered)}")
+    print(f"📌 Gerekçe: 1.000'den fazla marka içindeki 'Uzun Kuyruk' yapısı, modelin verisi az olan sınıfları öğrenememesine (Underfitting) yol açar.")
+    print(f"📌 Karar: Sınıflandırma karar sınırlarını (decision boundaries) istatistiksel olarak anlamlı kılmak için ilk 10 marka seçilmiştir.")
+
+    display(data_filtered.head())
+
+except Exception as e:
+    print(f"❌ Bir hata oluştu: {e}")
