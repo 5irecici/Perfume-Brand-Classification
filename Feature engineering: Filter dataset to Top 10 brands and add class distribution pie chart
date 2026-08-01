@@ -1,0 +1,57 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from google.colab import drive
+
+# --- 1. ORTAM HAZIRLIĞI VE VERİ YÜKLEME ---
+drive.mount('/content/drive')
+path = '/content/drive/MyDrive/fra_cleaned.csv'
+
+try:
+    # Veri yükleme (sep=';' ve latin-1 parfüm veri setleri için standarttır)
+    data = pd.read_csv(path, sep=';', encoding='latin-1')
+    print("✅ 1. ADIM: Veri başarıyla yüklendi!")
+    print(f"Ham Veri Boyutu: {data.shape}")
+
+    # --- 2. ADIM: HEDEF DEĞİŞKEN ÜZERİNDE ÖZELLİK MÜHENDİSLİĞİ VE SINIFLANDIRMA GEREKÇESİ ---
+
+    # Tüm marka frekanslarını hesaplayalım
+    brand_counts = data['Brand'].value_counts()
+    total_brands_raw = len(brand_counts)
+
+    # Kategorizasyon: Neden ilk 10 markayı seçiyoruz?
+    top_10_brands = brand_counts.head(10)
+    others_count = brand_counts.iloc[10:].count()
+
+    # Görselleştirme için verileri hazırlayalım
+    pie_labels = [f'Top 10 Dominant Marka\n({top_10_brands.sum()} Parfüm)',
+                  f'Diğer {others_count} Marka\n(Düşük Temsil Gücü)']
+    pie_sizes = [top_10_brands.sum(), brand_counts.iloc[10:].sum()]
+    colors = ['#2E8B57', '#DC143C'] # Yeşil (Güçlü Sınıflar), Kırmızı (Gürültülü Sınıflar)
+
+    # Pasta Grafiği Oluşturma
+    plt.figure(figsize=(12, 8))
+    plt.pie(pie_sizes, labels=pie_labels, autopct='%1.1f%%', startangle=140,
+            colors=colors, explode=(0.1, 0), shadow=True)
+
+    plt.title('Hedef Değişken (Brand) Sınıf Dağılımı: Neden Top 10?',
+              fontsize=15, fontweight='bold', color='#000080', pad=20)
+    plt.tight_layout()
+    plt.show()
+
+    # --- 3. VERİ SETİNİ TOP 10 MARKA İLE SINIRLANDIRMA (FİLTRELEME) ---
+    top_10_list = top_10_brands.index.tolist()
+    data_filtered = data[data['Brand'].isin(top_10_list)].copy()
+
+    print(f"\n--- TEKNİK ANALİZ RAPORU ---")
+    print(f"📌 Ham Verideki Toplam Marka Sayısı: {total_brands_raw}")
+    print(f"📌 Seçilen İlk 10 Markanın Veri Kümesindeki Ağırlığı: %{(top_10_brands.sum()/len(data))*100:.1f}")
+    print(f"📌 Filtreleme Sonrası Satır Sayısı: {len(data_filtered)}")
+    print(f"📌 Kalan Sınıf Sayısı: 10 (Çok Sınıflı Sınıflandırma İçin İdeal)")
+
+    # Filtrelenmiş verinin ilk 5 satırını görelim
+    display(data_filtered.head())
+
+except Exception as e:
+    print(f"❌ Bir hata oluştu: {e}")
