@@ -1,0 +1,124 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.model_selection import train_test_split
+from google.colab import drive
+
+# --- 1. ORTAM HAZIRLIĞI VE VERİ YÜKLEME ---
+drive.mount('/content/drive')
+path = '/content/drive/MyDrive/fra_cleaned.csv'
+
+# RENK PALETİ
+PALETTE = ['#2E8B57', '#3CB371', '#20B2AA', '#4682B4', '#6A5ACD',
+           '#7B68EE', '#483D8B', '#5F9EA0', '#87CEEB', '#B0C4DE']
+
+try:
+    # Veriyi yükleme
+    data_raw = pd.read_csv(path, sep=';', encoding='latin-1')
+    print("✅ 1. ADIM: Veri başarıyla yüklendi!")
+
+    # --- 2. VERİ SETİNİ İLK 10 MARKA İLE SINIRLANDIRMA ---
+    brand_counts = data_raw['Brand'].value_counts()
+    top_10_list = brand_counts.head(10).index.tolist()
+    data_filtered = data_raw[data_raw['Brand'].isin(top_10_list)].copy()
+
+    print(f"✅ 2. ADIM: Veri seti ilk 10 markaya filtrelendi. Satır Sayısı: {len(data_filtered)}")
+
+    # --- 3. ÖN İŞLEME: SAYISAL DÖNÜŞÜMLER ---
+    if data_filtered['Rating Value'].dtype == 'object':
+        data_filtered['Rating Value'] = data_filtered['Rating Value'].str.replace(',', '.').astype(float)
+
+    # --- 4. KOPYALAMA VE EKSİK DEĞERLERİN DOLDURULMASI ---
+    df = data_filtered.copy()
+
+    # Kategorik sütunları mod ile doldurma
+    cat_cols = df.select_dtypes('object').columns.tolist()
+    for col in cat_cols:
+        if not df[col].mode().empty:
+            df[col] = df[col].fillna(df[col].mode()[0])
+
+    # Sayısal sütunları medyan ile doldurma
+    num_cols = df.select_dtypes(include=[np.number]).columns
+    for col in num_cols:
+        df[col] = df[col].fillna(df[col].median())
+
+    print('Eksik değer kaldı mı:', df.isnull().sum().sum())
+
+    # --- 5. HEDEF DEĞİŞKENİNİ ENCODE ETME ---
+    le_brand = LabelEncoder()
+    df['Brand_Encoded'] = le_brand.fit_transform(df['Brand'])
+
+    # --- 6. KATEGORİK ÖZELLİKLERİ ENCODE ETME ---
+    feature_cols = [c for c in df.columns if c not in ['Brand', 'Brand_Encoded']]
+    le_features = LabelEncoder()
+
+    for col in df[feature_cols].select_dtypes('object').columns:
+        df[col] = le_features.fit_transform(df[col].astype(str))
+
+    X = df[feature_cols]
+    y = df['Brand_Encoded']
+
+    print(f'\n🚀 ÖZELLİK MATRİSLERİ OLUŞTURULDU')
+    print(f'X boyutu : {X.shape}')
+    print(f'Sınıf (Marka) Sayısı: {len(np.unique(y))}')
+
+    # --- 7. TRAIN / TEST AYRIMI ---
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.20, random_state=42, stratify=y
+    )
+
+    print(f'\n🚀 TRAIN / TEST AYRIMI TAMAMLANDI')
+    print(f'Eğitim Seti Boyutu : {X_train.shape[0]:,} örnek')
+    print(f'Test Seti Boyutu   : {X_test.shape[0]:,} örnek')
+
+    # --- 8. STANDARDIZASYON ---
+    scaler = StandardScaler()
+    X_train_sc = scaler.fit_transform(X_train)
+    X_test_sc  = scaler.transform(X_test)
+
+    print('\n🚀 ÖLÇEKLEME TAMAMLANDI')
+
+    # --- 9. KORELASYON ANALİZİ ---
+    corr_matrix = pd.DataFrame(X_train_sc, columns=feature_cols).corr(method='pearson')
+
+    fig, axes = plt.subplots(1, 2, figsize=(20, 7))
+
+    # Sol: Korelasyon Matrisi (Değerlerin okunabilmesi için font boyutları ayarlandı)
+    mask = np.triu(np.ones_like(corr_matrix, dtype=bool))
+    sns.heatmap(corr_matrix, mask=mask, annot=True, fmt=".2f", cmap='coolwarm',
+                center=0, vmin=-1, vmax=1, ax=axes[0],
+                xticklabels=feature_cols, yticklabels=feature_cols,
+                linewidths=0.3, cbar_kws={'shrink': 0.8}, annot_kws={'size': 7})
+    axes[0].set_title('Pearson Korelasyon Matrisi (Eğitim Seti)', fontweight='bold')
+    axes[0].tick_params(axis='x', rotation=45, labelsize=8)
+    axes[0].tick_params(axis='y', labelsize=8)
+
+    # Sağ: Hedefle Korelasyon Çubuk Grafiği (Sayısal etiketler eklendi)
+    target_corr = pd.DataFrame(X_train_sc, columns=feature_cols).corrwith(
+        pd.Series(y_train.values, name='Brand_Encoded')
+    ).abs().sort_values(ascending=True)
+
+    colors_bar = ['#e74c3c' if v > 0.05 else '#3498db' for v in target_corr.values]
+    bars = axes[1].barh(target_corr.index, target_corr.values, color=colors_bar, edgecolor='white')
+
+    # Sağdaki grafik üzerinde değerleri gösterme
+    for bar in bars:
+        width = bar.get_width()
+        axes[1].text(width + 0.005, bar.get_y() + bar.get_height()/2,
+                     f'{width:.3f}', va='center', ha='left', fontsize=8, fontweight='bold')
+
+    axes[1].axvline(0.05, color='red', linestyle='--', alpha=0.7, label='Eşik: |r|=0.05')
+    axes[1].set_title('Hedef Değişkenle Korelasyon (|r|)', fontweight='bold')
+    axes[1].set_xlabel('|Pearson r|')
+    axes[1].legend()
+
+    plt.tight_layout()
+    plt.show()
+    print('📌 Kırmızı çubuklar hedefle istatistiksel olarak ilişkili öznitelikleri temsil eder.')
+
+except FileNotFoundError:
+    print("❌ Hata: Dosya belirtilen yolda bulunamadı. Lütfen yolu kontrol edin.")
+except Exception as e:
+    print(f"❌ Bir hata oluştu: {e}")
