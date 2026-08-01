@@ -18,3 +18,9 @@ Machine learning algorithms often fail to generalize when faced with classes tha
 
 # Long-Tail Visualization & Noise Reduction:
 An analysis of the Brand target variable revealed a classic power-law distribution. The generated area chart clearly shows a massive "long tail" of underrepresented classes. Training a model on over 1,000 imbalanced classes introduces significant noise and leads to underfitting. Therefore, the dataset was systematically reduced to the Top 10 brands. This noise reduction step provides a statistically stable foundation for training high-accuracy classification algorithms.
+
+# Target Variable Profiling & Imbalance Strategy:
+Post-filtering, the dataset comprises the 10 most prominent perfume brands. A detailed distribution analysis (utilizing customized bar and pie charts) was conducted on this refined subset. The calculated class imbalance ratio highlighted the underlying distribution gaps, guiding the strategic decision to incorporate class balancing techniques (e.g., SMOTE) into the subsequent machine learning pipeline to ensure fair and unbiased predictions across all brands.
+
+
+
