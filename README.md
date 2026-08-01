@@ -37,3 +37,5 @@ Before feeding the data into classification algorithms, the feature matrices wer
 # Class Balancing Strategy (SMOTE):
 Even within the Top 10 brands, the dataset exhibited varying frequencies. To ensure the classifiers learn the minority classes just as effectively as the majority ones, SMOTE was integrated into the pipeline. To strictly avoid data leakage and overly optimistic performance metrics, oversampling was performed exclusively on the training subset. The test set was left exactly as is, guaranteeing a robust, unbiased, and real-world evaluation of the trained models.
 
+# Feature Selection & Correlation Analysis:
+To optimize model performance and avoid the curse of dimensionality, a rigorous Pearson correlation analysis was conducted on the training subset. A heatmap was utilized to monitor feature collinearity, while target correlations were evaluated to identify the most predictive attributes. Features demonstrating an absolute correlation coefficient greater than the defined threshold (∣r∣>0.05) were flagged as significant inputs, guiding the feature selection process for the classifiers.
