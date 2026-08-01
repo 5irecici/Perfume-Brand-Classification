@@ -1,0 +1,52 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from google.colab import drive
+
+# 1. Ortam Hazırlığı ve Drive Bağlantısı
+drive.mount('/content/drive')
+
+# 2. Veri Yükleme ve Eksik Değer Analizi
+path = '/content/drive/MyDrive/fra_cleaned.csv'
+
+try:
+    # --- YÜKLEME ADIMI ---
+    # fra_cleaned noktali virgul (;) kullanir ve latin-1 ile okunur
+    data = pd.read_csv(path, sep=';', encoding='latin-1')
+
+    print("✅ 1. ADIM: Veri başarıyla yüklendi!")
+    print(f"Toplam Kayıt Sayısı: {len(data)}")
+    print(f"Toplam Öznitelik Sayısı: {data.shape[1]}\n")
+
+    # --- EKSİK DEĞER ANALİZ ADIMI ---
+    missing = data.isnull().sum()
+    missing_pct = (missing / len(data) * 100).round(2)
+
+    # Sadece eksik değeri olan sütunları filtreleyip tablo oluşturma
+    df_missing = pd.DataFrame({
+        'Eksik Sayı': missing,
+        'Eksik (%)' : missing_pct
+    }).query('`Eksik Sayı` > 0').sort_values(by='Eksik Sayı', ascending=False)
+
+    print('─── 2. ADIM: Eksik Değer Tablosu ───')
+    if not df_missing.empty:
+        print(df_missing.to_string())
+    else:
+        print("Harika! Veri setinde hiçbir eksik değer bulunamadı.")
+
+    print(f'\nToplam eksik hücre sayısı: {data.isnull().sum().sum()}')
+
+    # Görselleştirme (Opsiyonel: Eksikliklerin yoğunluğunu gösterir)
+    if not df_missing.empty:
+        plt.figure(figsize=(10, 6))
+        sns.barplot(x=df_missing.index, y=df_missing['Eksik (%)'], palette='Reds_r')
+        plt.title('Öznitelik Bazında Eksik Veri Oranları (%)', fontweight='bold')
+        plt.xticks(rotation=45)
+        plt.ylabel('Eksiklik Yüzdesi')
+        plt.show()
+
+except FileNotFoundError:
+    print("❌ Hata: Dosya yolu bulunamadı. Lütfen yolu kontrol edin.")
+except Exception as e:
+    print(f"❌ Beklenmedik bir hata oluştu: {e}")
