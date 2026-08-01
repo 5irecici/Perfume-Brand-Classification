@@ -1,0 +1,67 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from google.colab import drive
+
+# --- 1. ORTAM HAZIRLIĞI VE VERİ YÜKLEME ---
+drive.mount('/content/drive')
+path = '/content/drive/MyDrive/fra_cleaned.csv'
+
+# RENK AYARI (Tablo renklendirmesi için: 'Blues', 'YlGn', 'Oranges', 'Purples', 'magma' vb.)
+MY_COLOR_MAP = 'Blues'
+
+try:
+    # fra_cleaned noktali virgul (;) kullanir ve latin-1 ile okunur
+    df_raw = pd.read_csv(path, sep=';', encoding='latin-1')
+    print("✅ 1. ADIM: Ham veri başarıyla yüklendi!")
+
+    # --- 2. ÖN İŞLEME (Sayısal Dönüşümler) ---
+    # Rating Value içindeki ',' karakterini '.' yapıp sayıya çeviriyoruz (İstatistik hesaplanabilmesi için)
+    if df_raw['Rating Value'].dtype == 'object':
+        df_raw['Rating Value'] = df_raw['Rating Value'].str.replace(',', '.').astype(float)
+
+    # --- 3. SAYISAL TANIMLAYICI İSTATİSTİKLER TABLOSU ---
+    # Veri setindeki orijinal sayısal sütunlar
+    num_cols = ['Rating Value', 'Rating Count', 'Year']
+
+    # İstatistiksel özet tablosu oluşturma ve Türkçeleştirme
+    desc_num = df_raw[num_cols].describe().T[['mean', 'std', 'min', '25%', '50%', '75%', 'max']].round(2)
+    desc_num.columns = ['Ortalama', 'Std Sapma', 'Min', 'Q1', 'Medyan', 'Q3', 'Max']
+
+    print('\n─── Sayısal Özelliklerin Tanımlayıcı İstatistikleri (Orijinal) ───')
+    styled_num = (desc_num.style
+                  .background_gradient(subset=['Ortalama'], cmap=MY_COLOR_MAP)
+                  .set_caption('Tablo 1: Mevcut Sayısal Verilerin İstatistiksel Özeti')
+                  .format("{:.2f}"))
+    display(styled_num)
+
+    # --- 4. KATEGORİK TANIMLAYICI İSTATİSTİKLER TABLOSU ---
+    # Veri setindeki temel kategorik sütunlar
+    cat_cols = ['Brand', 'Country', 'Gender', 'mainaccord1']
+    desc_cat = df_raw[cat_cols].describe(include='all').T
+
+    print('\n─── Kategorik Özelliklerin Özeti ───')
+    display(desc_cat.style.set_properties(**{'background-color': '#ffffff', 'border': '1px solid gray'}))
+
+    # --- 5. DAĞILIM GRAFİKLERİ ---
+    fig, axes = plt.subplots(1, 2, figsize=(18, 6))
+
+    # A. Marka Dağılımı (Top 20)
+    brand_counts = df_raw['Brand'].value_counts().head(20)
+    sns.barplot(x=brand_counts.index, y=brand_counts.values, ax=axes[0], palette='coolwarm')
+    axes[0].set_title('Ham Veri: En Çok Parfüme Sahip 20 Marka', fontweight='bold')
+    axes[0].tick_params(axis='x', rotation=90)
+    axes[0].set_ylabel('Parfüm Sayısı')
+
+    # B. Rating Dağılımı (Histogram)
+    sns.histplot(df_raw['Rating Value'], bins=30, kde=True, ax=axes[1], color='steelblue')
+    axes[1].set_title('Ham Veri: Parfüm Puanı (Rating) Dağılımı', fontweight='bold')
+    axes[1].set_xlabel('Puan (Rating Value)')
+    axes[1].set_ylabel('Frekans')
+
+    plt.tight_layout()
+    plt.show()
+
+except Exception as e:
+    print(f"❌ Bir hata oluştu: {e}")
