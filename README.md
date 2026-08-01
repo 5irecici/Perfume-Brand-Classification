@@ -15,3 +15,6 @@ Initial data exploration is performed to uncover the underlying structure of the
 
 # Addressing Class Imbalance and "Long-Tail" Problem:
 Machine learning algorithms often fail to generalize when faced with classes that have very few samples. By analyzing the frequency distribution of the Brand target variable, a massive long-tail distribution was identified. To build statistically meaningful decision boundaries, the dataset was filtered to include only the top 10 most frequent brands. This strategic reduction ensures that the models focus on classes with enough depth and representation.
+
+# Long-Tail Visualization & Noise Reduction:
+An analysis of the Brand target variable revealed a classic power-law distribution. The generated area chart clearly shows a massive "long tail" of underrepresented classes. Training a model on over 1,000 imbalanced classes introduces significant noise and leads to underfitting. Therefore, the dataset was systematically reduced to the Top 10 brands. This noise reduction step provides a statistically stable foundation for training high-accuracy classification algorithms.
