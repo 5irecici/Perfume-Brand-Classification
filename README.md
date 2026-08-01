@@ -12,3 +12,6 @@ Upon loading the dataset, a comprehensive missing value analysis is conducted. A
 
 # Exploratory Data Analysis (EDA):
 Initial data exploration is performed to uncover the underlying structure of the dataset. Categorical and numerical summaries are extracted, highlighting the most dominant brands and the general user rating distribution. This analysis plays a vital role in understanding the long-tail distribution of the brands before filtering the dataset for the classification models.
+
+# Addressing Class Imbalance and "Long-Tail" Problem:
+Machine learning algorithms often fail to generalize when faced with classes that have very few samples. By analyzing the frequency distribution of the Brand target variable, a massive long-tail distribution was identified. To build statistically meaningful decision boundaries, the dataset was filtered to include only the top 10 most frequent brands. This strategic reduction ensures that the models focus on classes with enough depth and representation.
