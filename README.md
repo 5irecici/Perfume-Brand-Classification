@@ -34,4 +34,6 @@ The preprocessing pipeline handles missing records systematically (median for nu
 # Feature Scaling & Leakage Prevention:
 Before feeding the data into classification algorithms, the feature matrices were normalized using Standard Scaling. A strict boundary was maintained between the training and testing sets to prevent data leakage. The scaler was fitted exclusively on the training subset, ensuring that the test set remains completely unseen and acts as a true benchmark for model evaluation.
 
+# Class Balancing Strategy (SMOTE):
+Even within the Top 10 brands, the dataset exhibited varying frequencies. To ensure the classifiers learn the minority classes just as effectively as the majority ones, SMOTE was integrated into the pipeline. To strictly avoid data leakage and overly optimistic performance metrics, oversampling was performed exclusively on the training subset. The test set was left exactly as is, guaranteeing a robust, unbiased, and real-world evaluation of the trained models.
 
