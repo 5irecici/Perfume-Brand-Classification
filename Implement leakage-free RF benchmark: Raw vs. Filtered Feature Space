@@ -1,0 +1,212 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.model_selection import train_test_split, cross_val_score
+from imblearn.over_sampling import SMOTE
+from imblearn.pipeline import Pipeline as ImbPipeline # 🟢 Sızdırmaz CV garantisi
+from sklearn.ensemble import RandomForestClassifier   # 🟢 Algoritma güncellendi
+from sklearn.feature_selection import SelectKBest, f_classif, RFE
+from sklearn.metrics import (accuracy_score, f1_score, precision_score,
+                             recall_score, roc_auc_score)
+from google.colab import drive
+
+# --- 1. ORTAM HAZIRLIĞI VE VERİ YÜKLEME ---
+drive.mount('/content/drive')
+path = '/content/drive/MyDrive/fra_cleaned.csv'
+
+CUSTOM_PALETTE = ['#462506', '#9F6920', '#DAA755', '#E9C579', '#F1DEA8']
+SEED = 42
+
+try:
+    data_raw = pd.read_csv(path, sep=';', encoding='latin-1')
+    print("✅ 1. ADIM: Veri başarıyla yüklendi!")
+
+    # --- 2. VERİ SETİNİ İLK 10 MARKA İLE SINIRLANDIRMA ---
+    brand_counts = data_raw['Brand'].value_counts()
+    top_10_list = brand_counts.head(10).index.tolist()
+    data_filtered = data_raw[data_raw['Brand'].isin(top_10_list)].copy()
+
+    # --- 3. ÖN İŞLEME: SAYISAL DÖNÜŞÜMLER ---
+    if data_filtered['Rating Value'].dtype == 'object':
+        data_filtered['Rating Value'] = data_filtered['Rating Value'].str.replace(',', '.').astype(float)
+
+    # --- 4. KOPYALAMA VE EKSİK DEĞERLERİN DOLDURULMASI ---
+    df = data_filtered.copy()
+    for col in df.select_dtypes('object').columns:
+        if not df[col].mode().empty: df[col] = df[col].fillna(df[col].mode()[0])
+    for col in df.select_dtypes(include=[np.number]).columns:
+        df[col] = df[col].fillna(df[col].median())
+
+    # --- 5. HEDEF DEĞİŞKENİNİ ENCODE ETME ---
+    le_brand = LabelEncoder()
+    df['Brand_Encoded'] = le_brand.fit_transform(df['Brand'])
+
+    # --- 6. KATEGORİK ÖZELLİKLERİ ENCODE ETME ---
+    exclude_cols = ['Brand', 'Brand_Encoded', 'url', 'Perfume', 'Description']
+    feature_cols = [c for c in df.columns if c not in exclude_cols]
+
+    le_features = LabelEncoder()
+    for col in feature_cols:
+        if df[col].dtype == 'object':
+            df[col] = le_features.fit_transform(df[col].astype(str))
+
+    X = df[feature_cols]
+    y = df['Brand_Encoded']
+
+    # --- 7. TRAIN / TEST AYRIMI ---
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.20, random_state=SEED, stratify=y
+    )
+
+    # --- 8. STANDARDIZASYON ---
+    scaler = StandardScaler()
+    X_train_sc = scaler.fit_transform(X_train)
+    X_test_sc  = scaler.transform(X_test)
+
+    # --- 9. ÖZELLİK SEÇİMİ (VOTING) İÇİN GEÇİCİ SMOTE ---
+    print('\n🚀 ÖZELLİK SEÇİMİ VE OYLAMA YAPILIYOR...')
+    smote_temp = SMOTE(random_state=SEED)
+    X_train_sm_temp, y_train_sm_temp = smote_temp.fit_resample(X_train_sc, y_train)
+
+    # A. SelectKBest
+    selector_kb = SelectKBest(score_func=f_classif, k=10)
+    selector_kb.fit(X_train_sm_temp, y_train_sm_temp)
+    selected_kb = np.array(feature_cols)[selector_kb.get_support()].tolist()
+
+    # B. Model Önemi (Random Forest ile) 🟢
+    rf_feat = RandomForestClassifier(n_estimators=50, random_state=SEED, n_jobs=-1)
+    rf_feat.fit(X_train_sm_temp, y_train_sm_temp)
+    importances = pd.DataFrame({'Özellik': feature_cols, 'Önem': rf_feat.feature_importances_})
+    selected_rf = importances.sort_values('Önem', ascending=False).head(10)['Özellik'].tolist()
+
+    # C. RFE (Random Forest ile) 🟢
+    rfe = RFE(estimator=rf_feat, n_features_to_select=10, step=1)
+    rfe.fit(X_train_sm_temp, y_train_sm_temp)
+    selected_rfe = np.array(feature_cols)[rfe.support_].tolist()
+
+    # Oylama Sayımı ve Nihai Seçim
+    sets = {'SelectKBest': set(selected_kb), 'RF Önemi': set(selected_rf), 'RFE': set(selected_rfe)}
+    comparison = pd.DataFrame({name: [('✅' if f in s else '❌') for f in feature_cols] for name, s in sets.items()}, index=feature_cols)
+    comparison['Oy Sayısı'] = comparison.apply(lambda r: list(r.values).count('✅'), axis=1)
+
+    selected_final = comparison[comparison['Oy Sayısı'] >= 2].index.tolist()
+    print(f'📌 Seçilen Nihai Özellik Seti ({len(selected_final)} Adet): {selected_final}')
+
+    # =========================================================================
+    # 10. BASELINE MODEL (TÜM ÖZELLİKLER) - SIZDIRMAZ EĞİTİM VE TEST
+    # =========================================================================
+    print('\n🚀 BASELINE MODEL (Tüm Özellikler - Random Forest) EĞİTİLİYOR...')
+
+    # 🟢 Sızdırmaz CV Pipeline
+    pipeline_base = ImbPipeline([
+        ('smote', SMOTE(random_state=SEED)),
+        ('rf', RandomForestClassifier(n_estimators=100, random_state=SEED, n_jobs=-1))
+    ])
+    cv_scores_base = cross_val_score(pipeline_base, X_train_sc, y_train, cv=5, scoring='f1_macro')
+
+    # Baseline Test Eğitimi
+    X_train_sm_base, y_train_sm_base = smote_temp.fit_resample(X_train_sc, y_train)
+    rf_baseline = RandomForestClassifier(n_estimators=100, random_state=SEED, n_jobs=-1).fit(X_train_sm_base, y_train_sm_base)
+
+    y_pred_base = rf_baseline.predict(X_test_sc)
+    y_prob_base = rf_baseline.predict_proba(X_test_sc)
+
+    test_metrics_base = {
+        'F1-Macro': f1_score(y_test, y_pred_base, average='macro'),
+        'AUC-ROC': roc_auc_score(y_test, y_prob_base, multi_class='ovr')
+    }
+
+    # =========================================================================
+    # 11. FİLTRELENMİŞ MODEL (SEÇİLEN ÖZELLİKLER) - SIZDIRMAZ EĞİTİM VE TEST
+    # =========================================================================
+    print('\n🚀 SEÇİLEN ÖZELLİKLERLE YENİ MODEL EĞİTİLİYOR VE TEST EDİLİYOR...')
+
+    final_idx = [feature_cols.index(f) for f in selected_final]
+    X_train_final_sc = X_train_sc[:, final_idx]
+    X_test_final_sc  = X_test_sc[:, final_idx]
+
+    print(f'📌 Boyut Düşüşü: {X_train_sc.shape[1]} özellik → {X_train_final_sc.shape[1]} özellik\n')
+
+    # 11.A: Sızdırmaz 5-Fold CV
+    pipeline_final = ImbPipeline([
+        ('smote', SMOTE(random_state=SEED)),
+        ('rf', RandomForestClassifier(n_estimators=100, random_state=SEED, n_jobs=-1))
+    ])
+    cv_scores_final = cross_val_score(pipeline_final, X_train_final_sc, y_train, cv=5, scoring='f1_macro')
+
+    df_cv_final = pd.DataFrame({
+        'Kat (Fold)': [f'Fold {i+1}' for i in range(5)],
+        'CV F1-Macro Skoru': cv_scores_final.round(4)
+    })
+    summary_final = pd.DataFrame([{
+        'Kat (Fold)': 'Ortalama ± Std',
+        'CV F1-Macro Skoru': f'{cv_scores_final.mean():.4f} ± {cv_scores_final.std():.4f}'
+    }])
+    df_cv_final_display = pd.concat([df_cv_final, summary_final], ignore_index=True)
+
+    print(f'─── 5-Fold CV Sonuçları (Sızdırmaz | Seçilen {len(selected_final)} Özellik) ───')
+    display(df_cv_final_display.style
+            .set_caption(f'Dürüst 5-Fold CV — Seçilen Özellikler (Test Folduna SMOTE Yok)')
+            .applymap(lambda v: f'font-weight: bold; background-color: {CUSTOM_PALETTE[4]}; color: {CUSTOM_PALETTE[0]};'
+                      if isinstance(v, str) and '±' in v else ''))
+
+    # 11.B: Test Seti Eğitimi
+    X_train_sm_final, y_train_sm_final = smote_temp.fit_resample(X_train_final_sc, y_train)
+    rf_final = RandomForestClassifier(n_estimators=100, random_state=SEED, n_jobs=-1).fit(X_train_sm_final, y_train_sm_final)
+
+    y_pred_final = rf_final.predict(X_test_final_sc)
+    y_prob_final = rf_final.predict_proba(X_test_final_sc)
+
+    test_metrics_final = {
+        'Accuracy (Doğruluk)'  : accuracy_score(y_test, y_pred_final),
+        'F1-Score (Macro)'     : f1_score(y_test, y_pred_final, average='macro'),
+        'Precision (Kesinlik)' : precision_score(y_test, y_pred_final, average='macro', zero_division=0),
+        'Recall (Duyarlılık)'  : recall_score(y_test, y_pred_final, average='macro'),
+        'AUC-ROC (Macro OVR)'  : roc_auc_score(y_test, y_prob_final, multi_class='ovr')
+    }
+
+    df_test_final = pd.DataFrame([{'Metrik': k, 'Değer': round(v, 4)} for k, v in test_metrics_final.items()])
+
+    print(f'\n─── Test Seti Sonuçları (Seçilen {len(selected_final)} Özellik) ───')
+    display(df_test_final.style
+            .set_properties(**{'background-color': CUSTOM_PALETTE[3], 'color': CUSTOM_PALETTE[0], 'font-weight': 'bold'})
+            .set_caption(f'Test Seti Performans Metrikleri — Filtrelenmiş Model'))
+
+    # =========================================================================
+    # 12. HAM VERİ VS SEÇİLEN ÖZELLİKLER GENEL KARŞILAŞTIRMA
+    # =========================================================================
+    print('\n─── Tüm Özellikler (Baseline) vs Seçilen Özellikler Genel Kıyaslaması ───')
+
+    df_genel = pd.DataFrame({
+        'Veri Temsili'   : ['Tüm Özellikler (Baseline)', f'Seçilen Özellikler ({len(selected_final)} adet)'],
+        'Özellik Sayısı' : [X_train_sc.shape[1], len(selected_final)],
+        'Dürüst CV F1'   : [round(cv_scores_base.mean(), 4), round(cv_scores_final.mean(), 4)],
+        'Test F1 (Macro)': [round(test_metrics_base['F1-Macro'], 4), round(test_metrics_final['F1-Score (Macro)'], 4)],
+        'Sapma (CV-Test)': [round(abs(cv_scores_base.mean() - test_metrics_base['F1-Macro']), 4),
+                            round(abs(cv_scores_final.mean() - test_metrics_final['F1-Score (Macro)']), 4)],
+        'AUC-ROC (OVR)'  : [round(test_metrics_base['AUC-ROC'], 4), round(test_metrics_final['AUC-ROC (Macro OVR)'], 4)],
+    })
+
+    display(df_genel.style
+            .highlight_max(subset=['Dürüst CV F1', 'Test F1 (Macro)', 'AUC-ROC (OVR)'], color=CUSTOM_PALETTE[2])
+            .highlight_min(subset=['Sapma (CV-Test)'], color=CUSTOM_PALETTE[2])
+            .set_properties(**{'border': f'1px solid {CUSTOM_PALETTE[0]}', 'text-align': 'center'})
+            .set_caption('🏆 Ham Veri vs Özellik Seçimi — Sızdırmaz RF Model Karşılaştırması')
+            .set_table_styles([{'selector': 'th', 'props': [('background-color', CUSTOM_PALETTE[0]), ('color', 'white')]}]))
+
+    diff_final = df_genel['Sapma (CV-Test)'].iloc[1]
+    diff_base = df_genel['Sapma (CV-Test)'].iloc[0]
+
+    print(f'\n📌 Baseline Sapması: {diff_base:.4f} | Seçilen Özelliklerin Sapması: {diff_final:.4f}')
+
+    if diff_final < diff_base:
+        print('   ✅ Başarılı! Boyut indirgeme, Random Forest modelinin aşırı öğrenmesini (overfitting) Baseline modele göre daha iyi engellemiş.')
+    else:
+        print('   ⚠️ Özellik seçimi modeli hafifletse de, Random Forest\'ın derinlik eğilimi sebebiyle ezberleme sorunu Baseline modele kıyasla daha iyi çözülememiştir. HPO (max_depth kısıtlaması) faydalı olacaktır.')
+
+except FileNotFoundError:
+    print("❌ Hata: Dosya belirtilen yolda bulunamadı.")
+except Exception as e:
+    print(f"❌ Bir hata oluştu: {e}")
