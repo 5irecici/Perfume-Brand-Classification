@@ -116,3 +116,11 @@ Hyperparameter tuning was dynamically executed using RandomizedSearchCV to optim
 A major focus of this architecture is optimizing the feature space to prevent the RandomForestClassifier from overfitting on high-dimensional fragrance profiles. We engineered an Ensemble Feature Selection protocol, utilizing a voting mechanism driven by statistical tests and RF intrinsic feature importances.
 
 To validate this methodology, a strictly leakage-free benchmarking pipeline was constructed using imblearn. A Baseline Model (utilizing all raw features) and a Filtered Model (utilizing only selected features) were evaluated side-by-side. All synthetic data generation (SMOTE) was rigorously confined to the cross-validation training folds. The resulting matrix analyzes the generalization gap (CV vs. Test scores), providing empirical proof of how strategic feature selection impacts both computational efficiency and model robustness.
+# End-to-End Pipeline & Model Evolution:
+The culmination of this fragrance classification project is an automated, leakage-free machine learning pipeline. A major challenge with high-dimensional multiclass data is the compounding effect of the "curse of dimensionality" and model overfitting.
+
+To resolve this, a three-stage evolutionary methodology was implemented using strict imblearn cross-validation pipelines:
+Stage 1: A Baseline Random Forest trained on all raw features.
+Stage 2: A dimensionality-reduced model utilizing an Ensemble Voting mechanism for feature selection.
+Stage 3: A fully Optimized model where the filtered feature space undergoes hyperparameter tuning via RandomizedSearchCV.
+The final performance matrix provides transparent empirical evidence of this evolution. By strictly confining data balancing (SMOTE) to the training folds, the metrics prove that the combination of feature selection and hyperparameter tuning drastically reduces the generalization gap, resulting in a highly reliable predictive engine.
