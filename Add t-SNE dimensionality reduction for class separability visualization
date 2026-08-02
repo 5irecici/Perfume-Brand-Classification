@@ -1,0 +1,134 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.model_selection import train_test_split
+from imblearn.over_sampling import SMOTE
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE  # t-SNE için eklendi
+from google.colab import drive
+
+# --- 1. ORTAM HAZIRLIĞI VE VERİ YÜKLEME ---
+drive.mount('/content/drive')
+path = '/content/drive/MyDrive/fra_cleaned.csv'
+
+# RENK PALETİ (10 Marka İçin)
+PALETTE = ['#2E8B57', '#3CB371', '#20B2AA', '#4682B4', '#6A5ACD',
+           '#7B68EE', '#483D8B', '#5F9EA0', '#87CEEB', '#B0C4DE']
+SEED = 42
+
+try:
+    # Veriyi yükleme
+    data_raw = pd.read_csv(path, sep=';', encoding='latin-1')
+    print("✅ 1. ADIM: Veri başarıyla yüklendi!")
+
+    # --- 2. VERİ SETİNİ İLK 10 MARKA İLE SINIRLANDIRMA ---
+    brand_counts = data_raw['Brand'].value_counts()
+    top_10_list = brand_counts.head(10).index.tolist()
+    data_filtered = data_raw[data_raw['Brand'].isin(top_10_list)].copy()
+
+    print(f"✅ 2. ADIM: Veri seti ilk 10 markaya filtrelendi. Satır Sayısı: {len(data_filtered)}")
+
+    # --- 3. ÖN İŞLEME: SAYISAL DÖNÜŞÜMLER ---
+    if data_filtered['Rating Value'].dtype == 'object':
+        data_filtered['Rating Value'] = data_filtered['Rating Value'].str.replace(',', '.').astype(float)
+
+    # --- 4. KOPYALAMA VE EKSİK DEĞERLERİN DOLDURULMASI ---
+    df = data_filtered.copy()
+
+    cat_cols = df.select_dtypes('object').columns.tolist()
+    for col in cat_cols:
+        if not df[col].mode().empty:
+            df[col] = df[col].fillna(df[col].mode()[0])
+
+    num_cols = df.select_dtypes(include=[np.number]).columns
+    for col in num_cols:
+        df[col] = df[col].fillna(df[col].median())
+
+    # --- 5. HEDEF DEĞİŞKENİNİ ENCODE ETME ---
+    le_brand = LabelEncoder()
+    df['Brand_Encoded'] = le_brand.fit_transform(df['Brand'])
+    brand_names = le_brand.classes_ # Lejant için gerçek marka isimlerini saklıyoruz
+
+    # --- 6. KATEGORİK ÖZELLİKLERİ ENCODE ETME ---
+    exclude_cols = ['Brand', 'Brand_Encoded', 'url', 'Perfume', 'Description']
+    feature_cols = [c for c in df.columns if c not in exclude_cols]
+
+    le_features = LabelEncoder()
+    for col in feature_cols:
+        if df[col].dtype == 'object':
+            df[col] = le_features.fit_transform(df[col].astype(str))
+
+    X = df[feature_cols]
+    y = df['Brand_Encoded']
+
+    print(f'\n🚀 ÖZELLİK MATRİSLERİ OLUŞTURULDU (Boyut: {X.shape})')
+
+    # --- 7. TRAIN / TEST AYRIMI ---
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.20, random_state=SEED, stratify=y
+    )
+
+    # --- 8. STANDARDIZASYON ---
+    scaler = StandardScaler()
+    X_train_sc = scaler.fit_transform(X_train)
+    X_test_sc  = scaler.transform(X_test)
+
+    # --- 9. SMOTE UYGULAMASI (Yalnızca Eğitim Setine) ---
+    smote = SMOTE(random_state=SEED)
+    X_train_sm, y_train_sm = smote.fit_resample(X_train_sc, y_train)
+    print(f"📌 SMOTE Sonrası Eğitim Seti Boyutu: {X_train_sm.shape}")
+
+
+    # --- 10. t-SNE GÖRSELLEŞTİRMESİ (PERPLEXITY KARŞILAŞTIRMASI) ---
+    print('\n🚀 10. ADIM: t-SNE Görselleştirmesi Başlıyor (Hesaplama sürebilir)...')
+
+    # Görselleştirme için örneklem al (t-SNE O(N log N) karmaşıklığında olduğu için büyük veride yavaştır)
+    N_SAMPLE = min(3000, len(X_train_sm)) # Veri 3000'den küçükse tamamını, büyükse 3000'ini al
+    idx_sample = np.random.choice(len(X_train_sm), N_SAMPLE, replace=False)
+
+    X_viz = X_train_sm[idx_sample]
+    y_viz = y_train_sm.iloc[idx_sample] if hasattr(y_train_sm, 'iloc') else y_train_sm[idx_sample]
+    y_viz_arr = np.array(y_viz)
+
+    perplexities = [15, 30, 50]
+    tsne_embs    = {}
+
+    fig, axes = plt.subplots(1, 3, figsize=(20, 6))
+    fig.suptitle('t-SNE: Perplexity Karşılaştırması (10 Markanın 2D Uzayda Dağılımı)', fontsize=16, fontweight='bold', y=1.05)
+
+    for ax, perp in zip(axes, perplexities):
+        tsne = TSNE(n_components=2, perplexity=perp, n_iter=800,
+                    learning_rate='auto', init='pca', random_state=SEED)
+        emb = tsne.fit_transform(X_viz)
+        tsne_embs[perp] = emb
+
+        # 10 Marka için döngü
+        for cls_idx in range(len(brand_names)):
+            m = (y_viz_arr == cls_idx)
+            ax.scatter(emb[m, 0], emb[m, 1],
+                       c=PALETTE[cls_idx % len(PALETTE)],
+                       label=brand_names[cls_idx],
+                       alpha=0.7, s=25, edgecolors='w', linewidth=0.5)
+
+        ax.set_title(f'Perplexity = {perp}', fontweight='bold', fontsize=13)
+        ax.set_xlabel('t-SNE Bileşeni 1', fontsize=11)
+        ax.set_ylabel('t-SNE Bileşeni 2', fontsize=11)
+        ax.grid(alpha=0.3)
+
+    # Ortak Lejantı figürün altına ekleme
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc='lower center', ncol=10, bbox_to_anchor=(0.5, -0.05), fontsize=10)
+
+    plt.tight_layout()
+    plt.show()
+
+    print('\n📌 TEKNİK ÇIKTI YORUMU:')
+    print('t-SNE haritasında markaların kendi içlerinde adacıklar (islands) oluşturması, verinin sınıflandırılabilir olduğunu gösterir.')
+    print('Renklerin iç içe girdiği alanlar ise, koku notaları birbirine çok benzeyen ve modelin ayrıştırmakta zorlanacağı parfüm gruplarıdır.')
+
+except FileNotFoundError:
+    print("❌ Hata: Dosya belirtilen yolda bulunamadı. Lütfen yolu kontrol edin.")
+except Exception as e:
+    print(f"❌ Bir hata oluştu: {e}")
