@@ -50,3 +50,9 @@ Following the removal of multicollinear attributes, an ANOVA F-test (SelectKBest
 Following the multicollinearity checks, a tree-based feature selection strategy was employed to further optimize the input space. A baseline Random Forest model was trained to compute the relative importance of each feature based on mean decrease in impurity. By isolating and visualizing the Top 10 most predictive attributes, the pipeline effectively filters out irrelevant noise. This strategic dimensionality reduction directly mitigates the risk of overfitting and ensures maximum computational efficiency during the final model training phase.
 # Recursive Feature Elimination (RFE) Pipeline:
 As the final step of the data engineering script, RFE was utilized to perform a rigorous feature selection. Using a Random Forest estimator, the algorithm recursively pruned the least significant attributes, considering complex feature interactions rather than just individual variances. This methodical reduction isolated the Top 10 fragrance features, ultimately mitigating overfitting, accelerating training times, and ensuring a highly interpretable and robust predictive model.
+# Robust Feature Selection via Consensus (Voting):
+To extract the absolute best predictors while aggressively reducing dimensionality, an ensemble feature selection architecture was designed. Instead of trusting a single metric, three diverse algorithms were deployed simultaneously:
+SelectKBest (ANOVA F-Test): For statistical variance analysis.
+Random Forest Importances: For non-linear, tree-based information gain.
+Recursive Feature Elimination (RFE): For complex feature interactions.
+A custom voting mechanism evaluated the results. Features were retained only if they were validated by at least two out of the three algorithms. This strict consensus protocol eliminated noisy variables, prevented overfitting, and yielded a lean, highly optimized feature matrix for model training.
