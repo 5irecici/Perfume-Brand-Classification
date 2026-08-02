@@ -1,0 +1,206 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.preprocessing import LabelEncoder, StandardScaler, label_binarize
+from sklearn.model_selection import train_test_split
+from imblearn.over_sampling import SMOTE
+from imblearn.pipeline import Pipeline as ImbPipeline # 🟢 Sızdırmaz Boru Hattı
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.feature_selection import SelectKBest, f_classif, RFE
+from sklearn.decomposition import PCA
+from sklearn.metrics import (accuracy_score, f1_score, precision_score,
+                             recall_score, roc_auc_score, roc_curve,
+                             precision_recall_curve, average_precision_score)
+from google.colab import drive
+
+# --- 1. ORTAM HAZIRLIĞI VE VERİ YÜKLEME ---
+drive.mount('/content/drive')
+path = '/content/drive/MyDrive/fra_cleaned.csv'
+
+CUSTOM_PALETTE = ['#462506', '#9F6920', '#DAA755', '#E9C579', '#F1DEA8']
+SEED = 42
+
+try:
+    data_raw = pd.read_csv(path, sep=';', encoding='latin-1')
+    print("✅ 1. ADIM: Veri başarıyla yüklendi!")
+
+    # --- 2. VERİ SETİNİ İLK 10 MARKA İLE SINIRLANDIRMA ---
+    brand_counts = data_raw['Brand'].value_counts()
+    top_10_list = brand_counts.head(10).index.tolist()
+    data_filtered = data_raw[data_raw['Brand'].isin(top_10_list)].copy()
+
+    # --- 3. ÖN İŞLEME VE EKSİK VERİ DOLDURMA ---
+    if data_filtered['Rating Value'].dtype == 'object':
+        data_filtered['Rating Value'] = data_filtered['Rating Value'].str.replace(',', '.').astype(float)
+
+    df = data_filtered.copy()
+    for col in df.select_dtypes('object').columns:
+        if not df[col].mode().empty: df[col] = df[col].fillna(df[col].mode()[0])
+    for col in df.select_dtypes(include=[np.number]).columns:
+        df[col] = df[col].fillna(df[col].median())
+
+    # --- 4. GÜVENLİ ENCODING ---
+    le_brand = LabelEncoder()
+    df['Brand_Encoded'] = le_brand.fit_transform(df['Brand'])
+    classes_unique = np.unique(df['Brand_Encoded'])
+
+    exclude_cols = ['Brand', 'Brand_Encoded', 'url', 'Perfume', 'Description']
+    feature_cols = [c for c in df.columns if c not in exclude_cols]
+
+    # 🟢 DÜZELTME: Her özellik için ayrı LabelEncoder
+    encoders = {}
+    for col in feature_cols:
+        if df[col].dtype == 'object':
+            le = LabelEncoder()
+            df[col] = le.fit_transform(df[col].astype(str))
+            encoders[col] = le
+
+    X = df[feature_cols]
+    y = df['Brand_Encoded']
+
+    # --- 5. SPLIT & SCALE ---
+    # 🟢 ROC Eğrisi için y_bin oluşturuluyor ve test setine ekleniyor
+    y_bin = label_binarize(y, classes=classes_unique)
+    X_train, X_test, y_train, y_test, y_train_bin, y_test_bin = train_test_split(
+        X, y, y_bin, test_size=0.20, random_state=SEED, stratify=y
+    )
+
+    scaler = StandardScaler()
+    X_train_sc = scaler.fit_transform(X_train)
+    X_test_sc  = scaler.transform(X_test)
+
+    # --- 6. GEÇİCİ SMOTE (YALNIZCA ÖZELLİK ANALİZİ İÇİN) ---
+    print('\n🚀 GEÇİCİ HESAPLAMALAR YAPILIYOR (Özellik Seçimi ve PCA Limitleri)...')
+    smote_temp = SMOTE(random_state=SEED)
+    # 🟢 DİKKAT: Bu değişkenler ASLA model eğitimine girmeyecek, sadece referans noktaları için.
+    X_train_sm_temp, y_train_sm_temp = smote_temp.fit_resample(X_train_sc, y_train)
+
+    # =========================================================================
+    # A. ÖZELLİK SEÇİMİ (VOTING) HAZIRLIĞI
+    # =========================================================================
+    selector_kb = SelectKBest(score_func=f_classif, k=10).fit(X_train_sm_temp, y_train_sm_temp)
+    selected_kb = np.array(feature_cols)[selector_kb.get_support()].tolist()
+
+    gb_feat = GradientBoostingClassifier(n_estimators=50, random_state=SEED).fit(X_train_sm_temp, y_train_sm_temp)
+    selected_gb = pd.DataFrame({'Özellik': feature_cols, 'Önem': gb_feat.feature_importances_}).sort_values('Önem', ascending=False).head(10)['Özellik'].tolist()
+
+    rfe = RFE(estimator=gb_feat, n_features_to_select=10, step=1).fit(X_train_sm_temp, y_train_sm_temp)
+    selected_rfe = np.array(feature_cols)[rfe.support_].tolist()
+
+    sets = {'SelectKBest': set(selected_kb), 'GB Önemi': set(selected_gb), 'RFE': set(selected_rfe)}
+    comparison = pd.DataFrame({name: [('✅' if f in s else '❌') for f in feature_cols] for name, s in sets.items()}, index=feature_cols)
+    comparison['Oy Sayısı'] = comparison.apply(lambda r: list(r.values).count('✅'), axis=1)
+
+    selected_final = comparison[comparison['Oy Sayısı'] >= 2].index.tolist()
+    final_idx = [feature_cols.index(f) for f in selected_final]
+
+    # Sızdırmaz Model Eğitim Kesitleri (SMOTE YOK)
+    X_train_final_sc = X_train_sc[:, final_idx]
+    X_test_final_sc  = X_test_sc[:, final_idx]
+
+    # =========================================================================
+    # B. PCA BİLEŞEN SAYISI BELİRLENİYOR
+    # =========================================================================
+    pca_temp = PCA(random_state=SEED).fit(X_train_sm_temp)
+    n90 = np.argmax(np.cumsum(pca_temp.explained_variance_ratio_) * 100 >= 90) + 1
+
+    # =========================================================================
+    # C. SIZDIRMAZ MODELLERİN EĞİTİLMESİ (PIPELINE)
+    # =========================================================================
+    print('\n🚀 MODELLER SIZDIRMAZ PİPELİNE İLE EĞİTİLİYOR...')
+
+    # 1. Baseline Model (Ham Veri)
+    pipe_base = ImbPipeline([('smote', SMOTE(random_state=SEED)), ('gb', GradientBoostingClassifier(n_estimators=100, random_state=SEED))])
+    pipe_base.fit(X_train_sc, y_train)
+    y_prob_base = pipe_base.predict_proba(X_test_sc)
+
+    # 2. Seçilen Özellikler Modeli
+    pipe_final = ImbPipeline([('smote', SMOTE(random_state=SEED)), ('gb', GradientBoostingClassifier(n_estimators=100, random_state=SEED))])
+    pipe_final.fit(X_train_final_sc, y_train)
+    y_prob_final = pipe_final.predict_proba(X_test_final_sc)
+
+    # 3. PCA Modeli (Sızdırmaz)
+    pipe_pca = ImbPipeline([
+        ('smote', SMOTE(random_state=SEED)),
+        ('pca', PCA(n_components=n90, random_state=SEED)),
+        ('gb', GradientBoostingClassifier(n_estimators=100, random_state=SEED))
+    ])
+    pipe_pca.fit(X_train_sc, y_train)
+    y_prob_pca = pipe_pca.predict_proba(X_test_sc)
+
+    # =========================================================================
+    # D. 3 MODEL İÇİN ROC VE PRECISION-RECALL EĞRİLERİ (ÇOK SINIFLI / MICRO-AVG)
+    # =========================================================================
+    print('\n🚀 ROC VE PRECISION-RECALL EĞRİLERİ ÇİZİLDİRİLİYOR...\n')
+
+    modeller = [
+        {'isim': f'Ham Veri ({X_train_sc.shape[1]} özellik)', 'y_prob': y_prob_base, 'renk': CUSTOM_PALETTE[0]},
+        {'isim': f'Seçilen Özellikler ({len(selected_final)} özellik)', 'y_prob': y_prob_final, 'renk': CUSTOM_PALETTE[1]},
+        {'isim': f'PCA ({n90} bileşen)', 'y_prob': y_prob_pca, 'renk': CUSTOM_PALETTE[2]},
+    ]
+
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+
+    for m in modeller:
+        # ROC Eğrisi
+        fpr, tpr, _ = roc_curve(y_test_bin.ravel(), m['y_prob'].ravel())
+        auc_val = roc_auc_score(y_test, m['y_prob'], multi_class='ovr')
+
+        axes[0].plot(fpr, tpr, color=m['renk'], linewidth=2.5, label=f"{m['isim']} (AUC={auc_val:.4f})")
+        axes[0].fill_between(fpr, tpr, alpha=0.05, color=m['renk'])
+
+        # Precision-Recall Eğrisi
+        prec, rec, _ = precision_recall_curve(y_test_bin.ravel(), m['y_prob'].ravel())
+        ap_val = average_precision_score(y_test_bin, m['y_prob'], average='micro')
+
+        axes[1].plot(rec, prec, color=m['renk'], linewidth=2.5, label=f"{m['isim']} (AP={ap_val:.4f})")
+        axes[1].fill_between(rec, prec, alpha=0.05, color=m['renk'])
+
+    # ROC Ayarları
+    axes[0].plot([0, 1], [0, 1], 'k--', linewidth=1.5, label='Rastgele Tahmin')
+    axes[0].set_xlabel('Yanlış Pozitif Oranı (FPR)', fontsize=11)
+    axes[0].set_ylabel('Doğru Pozitif Oranı (TPR)', fontsize=11)
+    axes[0].set_title('ROC Eğrisi (Çok Sınıflı - Micro Average)', fontweight='bold', fontsize=13)
+    axes[0].legend(fontsize=9, loc='lower right')
+    axes[0].grid(alpha=0.3)
+    axes[0].set_xlim([0, 1])
+    axes[0].set_ylim([0, 1.02])
+
+    # PR Ayarları
+    baseline = 1.0 / len(classes_unique)
+    axes[1].axhline(baseline, color='gray', linestyle='--', linewidth=1.5, label=f'Rastgele Tahmin (AP={baseline:.2f})')
+    axes[1].set_xlabel('Recall (Duyarlılık)', fontsize=11)
+    axes[1].set_ylabel('Precision (Kesinlik)', fontsize=11)
+    axes[1].set_title('Precision-Recall Eğrisi (Çok Sınıflı - Micro Average)', fontweight='bold', fontsize=13)
+    axes[1].legend(fontsize=9, loc='upper right')
+    axes[1].grid(alpha=0.3)
+    axes[1].set_xlim([0, 1])
+    axes[1].set_ylim([0, 1.02])
+
+    plt.suptitle('Sızdırmaz Model Güvenilirlik Eğrileri — Ham Veri / Seçilen Özellikler / PCA\n',
+                 fontsize=15, fontweight='bold', y=1.02, color=CUSTOM_PALETTE[0])
+    plt.tight_layout()
+    plt.show()
+
+    # ── AUC Özet Tablosu ──
+    print('\n─── Performans Eğrileri (AUC-ROC ve AP) Özet Tablosu ───')
+    rows_auc = []
+    for m in modeller:
+        rows_auc.append({
+            'Model Yapısı' : m['isim'],
+            'AUC-ROC Skoru (OVR)'  : round(roc_auc_score(y_test, m['y_prob'], multi_class='ovr'), 4),
+            'Average Precision (AP)': round(average_precision_score(y_test_bin, m['y_prob'], average='micro'), 4),
+        })
+
+    df_auc = pd.DataFrame(rows_auc)
+    display(df_auc.style
+            .highlight_max(subset=['AUC-ROC Skoru (OVR)', 'Average Precision (AP)'], color=CUSTOM_PALETTE[2])
+            .set_properties(**{'border': f'1px solid {CUSTOM_PALETTE[0]}', 'text-align': 'center'})
+            .set_caption('🏆 En yüksek eğri altı alan (AUC) değerleri vurgulanmıştır')
+            .set_table_styles([{'selector': 'th', 'props': [('background-color', CUSTOM_PALETTE[0]), ('color', 'white')]}]))
+
+except FileNotFoundError:
+    print("❌ Hata: Dosya belirtilen yolda bulunamadı. Lütfen yolu kontrol edin.")
+except Exception as e:
+    print(f"❌ Bir hata oluştu: {e}")
