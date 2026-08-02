@@ -97,3 +97,7 @@ By analyzing the row-normalized heatmaps (Recall percentages), we can precisely 
 # Model Reliability & Probabilistic Evaluation:
 To ensure the models are not just accurate but also statistically confident in their predictions, a rigorous probabilistic evaluation was conducted. Multi-class ROC and Precision-Recall (PR) curves were generated using a micro-averaged One-vs-Rest (OVR) approach.
 The visual benchmark directly compared the Baseline, Ensemble-Filtered, and PCA models. The resulting Area Under the Curve (AUC) and Average Precision (AP) scores demonstrated exactly how well the models distinguish between the overlapping fragrance profiles across all probability thresholds. This analysis proves the final model's high reliability and readiness for real-world inference.
+# Robust Baseline Modeling & Data Leakage Prevention:
+The initial predictive architecture of this project is built upon a RandomForestClassifier. To ensure absolute integrity during model evaluation, the scaling process and the classifier were encapsulated within a Scikit-Learn Pipeline. This design strictly prevents Data Leakage during the 5-Fold Cross-Validation phase.
+
+Furthermore, the model's robustness was validated by benchmarking the cross-validation performance directly against an untouched test set. The automated tracking of the generalization gap (CV vs. Test score deviation) provides empirical evidence that the model avoids overfitting and is capable of making reliable, unbiased predictions on unseen fragrance data.
