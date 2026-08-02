@@ -56,3 +56,5 @@ SelectKBest (ANOVA F-Test): For statistical variance analysis.
 Random Forest Importances: For non-linear, tree-based information gain.
 Recursive Feature Elimination (RFE): For complex feature interactions.
 A custom voting mechanism evaluated the results. Features were retained only if they were validated by at least two out of the three algorithms. This strict consensus protocol eliminated noisy variables, prevented overfitting, and yielded a lean, highly optimized feature matrix for model training.
+# Dimensionality Reduction Strategy (PCA):
+To evaluate the complexity and redundancy within the optimized feature space, a Principal Component Analysis (PCA) was conducted on the balanced training set. Through rigorous variance analysis (visualized via Scree and Cumulative Variance plots), the pipeline mathematically determined the optimal number of principal components required to preserve 90% and 95% of the total variance. This diagnostic step ensures that any future dimensionality reduction will successfully eliminate noise and speed up training times without sacrificing the predictive power needed to classify the perfume brands accurately.
