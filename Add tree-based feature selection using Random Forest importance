@@ -1,0 +1,149 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from google.colab import drive
+
+# --- 1. ORTAM HAZIRLIĞI VE VERİ YÜKLEME ---
+drive.mount('/content/drive')
+path = '/content/drive/MyDrive/fra_cleaned.csv'
+
+# RENK PALETİ
+PALETTE = ['#2E8B57', '#3CB371', '#20B2AA', '#4682B4', '#6A5ACD',
+           '#7B68EE', '#483D8B', '#5F9EA0', '#87CEEB', '#B0C4DE']
+
+try:
+    # Veriyi yükleme
+    data_raw = pd.read_csv(path, sep=';', encoding='latin-1')
+    print("✅ 1. ADIM: Veri başarıyla yüklendi!")
+
+    # --- 2. VERİ SETİNİ İLK 10 MARKA İLE SINIRLANDIRMA ---
+    brand_counts = data_raw['Brand'].value_counts()
+    top_10_list = brand_counts.head(10).index.tolist()
+    data_filtered = data_raw[data_raw['Brand'].isin(top_10_list)].copy()
+
+    print(f"✅ 2. ADIM: Veri seti ilk 10 markaya filtrelendi. Satır Sayısı: {len(data_filtered)}")
+
+    # --- 3. ÖN İŞLEME: SAYISAL DÖNÜŞÜMLER ---
+    if data_filtered['Rating Value'].dtype == 'object':
+        data_filtered['Rating Value'] = data_filtered['Rating Value'].str.replace(',', '.').astype(float)
+
+    # --- 4. KOPYALAMA VE EKSİK DEĞERLERİN DOLDURULMASI ---
+    df = data_filtered.copy()
+
+    # Kategorik sütunları mod ile doldurma
+    cat_cols = df.select_dtypes('object').columns.tolist()
+    for col in cat_cols:
+        if not df[col].mode().empty:
+            df[col] = df[col].fillna(df[col].mode()[0])
+
+    # Sayısal sütunları medyan ile doldurma
+    num_cols = df.select_dtypes(include=[np.number]).columns
+    for col in num_cols:
+        df[col] = df[col].fillna(df[col].median())
+
+    print('Eksik değer kaldı mı:', df.isnull().sum().sum())
+
+    # --- 5. HEDEF DEĞİŞKENİNİ ENCODE ETME ---
+    le_brand = LabelEncoder()
+    df['Brand_Encoded'] = le_brand.fit_transform(df['Brand'])
+
+    # --- 6. KATEGORİK ÖZELLİKLERİ ENCODE ETME ---
+    # Hariç tutulacak sütunlar listesi (url, isim ve gereksiz metin sütunları)
+    exclude_cols = ['Brand', 'Brand_Encoded', 'url', 'Perfume', 'Description']
+    feature_cols = [c for c in df.columns if c not in exclude_cols]
+
+    le_features = LabelEncoder()
+    for col in feature_cols:
+        if df[col].dtype == 'object':
+            df[col] = le_features.fit_transform(df[col].astype(str))
+
+    X = df[feature_cols]
+    y = df['Brand_Encoded']
+
+    print(f'\n🚀 ÖZELLİK MATRİSLERİ OLUŞTURULDU')
+    print(f'X boyutu : {X.shape}')
+    print(f'Sınıf (Marka) Sayısı: {len(np.unique(y))}')
+
+    # --- 7. TRAIN / TEST AYRIMI ---
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.20, random_state=42, stratify=y
+    )
+
+    print(f'\n🚀 TRAIN / TEST AYRIMI TAMAMLANDI')
+    print(f'Eğitim Seti Boyutu : {X_train.shape[0]:,} örnek')
+    print(f'Test Seti Boyutu   : {X_test.shape[0]:,} örnek')
+
+    # --- 8. STANDARDIZASYON ---
+    scaler = StandardScaler()
+    X_train_sc = scaler.fit_transform(X_train)
+    X_test_sc  = scaler.transform(X_test)
+
+    print('\n🚀 ÖLÇEKLEME TAMAMLANDI')
+
+    # --- 9. KORELASYON ANALİZİ VE YÜKSEK KORELASYONLU ÖZELLİK ELEME ---
+    corr_matrix = pd.DataFrame(X_train_sc, columns=feature_cols).corr(method='pearson')
+
+    CORR_THRESHOLD = 0.90
+    upper_tri = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
+
+    high_corr_pairs = [
+        (col, row, round(upper_tri.loc[row, col], 3))
+        for col in upper_tri.columns
+        for row in upper_tri.index
+        if abs(upper_tri.loc[row, col]) > CORR_THRESHOLD
+    ]
+
+    drop_high_corr = []
+    if high_corr_pairs:
+        drop_high_corr = list(set([p[1] for p in high_corr_pairs]))
+
+    features_after_corr = [f for f in feature_cols if f not in drop_high_corr]
+
+    # --- 10. RANDOM FOREST ÖZELLİK ÖNEMİ ---
+    rf_feat = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+    rf_feat.fit(X_train_sc, y_train)
+
+    importances = pd.DataFrame({
+        'Özellik' : feature_cols,
+        'Önem'    : rf_feat.feature_importances_.round(4)
+    }).sort_values('Önem', ascending=False).reset_index(drop=True)
+
+    # En önemli 10 özelliği görselleştirme
+    top10 = importances.head(10)
+
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+
+    # Çubuk Grafik (Top 10)
+    colors_imp = plt.cm.Blues(np.linspace(0.4, 0.9, len(top10)))[::-1]
+    axes[0].barh(top10['Özellik'][::-1], top10['Önem'][::-1], color=colors_imp, edgecolor='white')
+    axes[0].set_title('RF Özellik Önemi (Top 10)', fontweight='bold')
+    axes[0].set_xlabel('Önem Skoru')
+    axes[0].grid(axis='x', linestyle='--', alpha=0.3)
+
+    # Çubuk Grafik (Tümü)
+    axes[1].bar(importances['Özellik'], importances['Önem'],
+                color=['#2E8B57' if i < 10 else '#B0C4DE' for i in range(len(importances))],
+                edgecolor='white')
+    axes[1].set_title('Tüm Özellikler — RF Önemi', fontweight='bold')
+    axes[1].set_xlabel('Özellik')
+    axes[1].set_ylabel('Önem Skoru')
+    axes[1].tick_params(axis='x', rotation=90, labelsize=8)
+    axes[1].grid(axis='y', linestyle='--', alpha=0.3)
+
+    plt.tight_layout()
+    plt.show()
+
+    selected_rf = top10['Özellik'].tolist()
+    print('📌 RF Önem Skoruna Göre Seçilen Özellikler:', selected_rf)
+    display(importances.style
+            .background_gradient(subset=['Önem'], cmap='Greens')
+            .set_caption('Random Forest Özellik Önemi Tablosu'))
+
+except FileNotFoundError:
+    print("❌ Hata: Dosya belirtilen yolda bulunamadı. Lütfen yolu kontrol edin.")
+except Exception as e:
+    print(f"❌ Bir hata oluştu: {e}")
