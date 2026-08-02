@@ -1,0 +1,134 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.model_selection import train_test_split
+from imblearn.over_sampling import SMOTE
+from sklearn.decomposition import PCA
+from google.colab import drive
+
+# --- 1. ORTAM HAZIRLIĞI VE VERİ YÜKLEME ---
+drive.mount('/content/drive')
+path = '/content/drive/MyDrive/fra_cleaned.csv'
+
+# RENK PALETİ
+PALETTE = ['#2E8B57', '#3CB371', '#20B2AA', '#4682B4', '#6A5ACD',
+           '#7B68EE', '#483D8B', '#5F9EA0', '#87CEEB', '#B0C4DE']
+
+try:
+    # Veriyi yükleme
+    data_raw = pd.read_csv(path, sep=';', encoding='latin-1')
+    print("✅ 1. ADIM: Veri başarıyla yüklendi!")
+
+    # --- 2. VERİ SETİNİ İLK 10 MARKA İLE SINIRLANDIRMA ---
+    brand_counts = data_raw['Brand'].value_counts()
+    top_10_list = brand_counts.head(10).index.tolist()
+    data_filtered = data_raw[data_raw['Brand'].isin(top_10_list)].copy()
+
+    print(f"✅ 2. ADIM: Veri seti ilk 10 markaya filtrelendi. Satır Sayısı: {len(data_filtered)}")
+
+    # --- 3. ÖN İŞLEME: SAYISAL DÖNÜŞÜMLER ---
+    if data_filtered['Rating Value'].dtype == 'object':
+        data_filtered['Rating Value'] = data_filtered['Rating Value'].str.replace(',', '.').astype(float)
+
+    # --- 4. KOPYALAMA VE EKSİK DEĞERLERİN DOLDURULMASI ---
+    df = data_filtered.copy()
+
+    cat_cols = df.select_dtypes('object').columns.tolist()
+    for col in cat_cols:
+        if not df[col].mode().empty:
+            df[col] = df[col].fillna(df[col].mode()[0])
+
+    num_cols = df.select_dtypes(include=[np.number]).columns
+    for col in num_cols:
+        df[col] = df[col].fillna(df[col].median())
+
+    # --- 5. HEDEF DEĞİŞKENİNİ ENCODE ETME ---
+    le_brand = LabelEncoder()
+    df['Brand_Encoded'] = le_brand.fit_transform(df['Brand'])
+
+    # --- 6. KATEGORİK ÖZELLİKLERİ ENCODE ETME ---
+    # Ezber yaratacak ID bazlı (url, açıklama vb.) öznitelikleri çıkarıyoruz.
+    exclude_cols = ['Brand', 'Brand_Encoded', 'url', 'Perfume', 'Description']
+    feature_cols = [c for c in df.columns if c not in exclude_cols]
+
+    le_features = LabelEncoder()
+    for col in feature_cols:
+        if df[col].dtype == 'object':
+            df[col] = le_features.fit_transform(df[col].astype(str))
+
+    X = df[feature_cols]
+    y = df['Brand_Encoded']
+
+    print(f'\n🚀 ÖZELLİK MATRİSLERİ OLUŞTURULDU')
+    print(f'X boyutu : {X.shape}')
+
+    # --- 7. TRAIN / TEST AYRIMI ---
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.20, random_state=42, stratify=y
+    )
+
+    # --- 8. STANDARDIZASYON ---
+    scaler = StandardScaler()
+    X_train_sc = scaler.fit_transform(X_train)
+    X_test_sc  = scaler.transform(X_test)
+
+    # --- 9. SMOTE UYGULAMASI (Yalnızca Eğitim Setine) ---
+    smote = SMOTE(random_state=42)
+    X_train_sm, y_train_sm = smote.fit_resample(X_train_sc, y_train)
+    print(f"📌 SMOTE Sonrası Eğitim Seti Boyutu: {X_train_sm.shape}")
+
+    # --- 10. PCA — VARYANS (DİRSEK) ANALİZİ ---
+    print('\n🚀 10. PCA ANALİZİ BAŞLATILIYOR...')
+    pca_full = PCA(random_state=42)
+
+    # PCA'i dengelenmiş (SMOTE) ve ölçeklenmiş veri üzerinde eğitiyoruz
+    pca_full.fit(X_train_sm)
+
+    # Varyans hesaplamaları
+    cumvar = np.cumsum(pca_full.explained_variance_ratio_) * 100
+    indiv  = pca_full.explained_variance_ratio_ * 100
+
+    # %90 ve %95 varyans için gereken bileşen (component) sayıları
+    n90 = np.argmax(cumvar >= 90) + 1
+    n95 = np.argmax(cumvar >= 95) + 1
+
+    # --- GÖRSELLEŞTİRME ---
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+
+    # Sol Grafik: Her bileşenin tekil varyansı
+    axes[0].bar(range(1, len(indiv)+1), indiv, color='#3498db', alpha=0.8, edgecolor='white')
+    axes[0].set_xlabel('Temel Bileşen (Principal Component) No', fontsize=11)
+    axes[0].set_ylabel('Açıklanan Varyans Yüzdesi (%)', fontsize=11)
+    axes[0].set_title('Bileşenlerin Bireysel Varyans Katkısı (Scree Plot)', fontweight='bold')
+    axes[0].axvline(n90, color='orange', linestyle='--', linewidth=2, label=f'Varyans %90 için (n={n90})')
+    axes[0].legend()
+    axes[0].grid(axis='y', linestyle='--', alpha=0.3)
+
+    # Sağ Grafik: Kümülatif Varyans (Dirsek Analizi)
+    axes[1].plot(range(1, len(cumvar)+1), cumvar, 'o-', color='#e74c3c', linewidth=2, markersize=5)
+    axes[1].axhline(95, color='green',  linestyle='--', linewidth=2, label=f'%95 Varyans → {n95} Bileşen')
+    axes[1].axhline(90, color='orange', linestyle='--', linewidth=2, label=f'%90 Varyans → {n90} Bileşen')
+    axes[1].axvline(n90, color='orange', linestyle=':', alpha=0.6)
+
+    axes[1].set_xlabel('Toplam Temel Bileşen Sayısı', fontsize=11)
+    axes[1].set_ylabel('Kümülatif Açıklanan Varyans (%)', fontsize=11)
+    axes[1].set_title('Kümülatif Varyans Eğrisi (Dirsek Metodu)', fontweight='bold')
+    axes[1].legend()
+    axes[1].grid(alpha=0.3)
+
+    plt.suptitle('PCA (Temel Bileşenler Analizi) Varyans Raporu', fontsize=14, fontweight='bold', y=1.05)
+    plt.tight_layout()
+    plt.show()
+
+    # Analiz Çıktıları
+    print('\n─── PCA Teknik Analiz Çıktısı ───')
+    print(f"📌 Toplam {X_train_sm.shape[1]} öznitelik analize girdi.")
+    print(f"📌 Veri setinin %90 bilgisini (varyansını) korumak için gerekli bileşen sayısı: {n90}")
+    print(f"📌 Veri setinin %95 bilgisini korumak için gerekli bileşen sayısı: {n95}")
+
+except FileNotFoundError:
+    print("❌ Hata: Dosya belirtilen yolda bulunamadı. Lütfen yolu kontrol edin.")
+except Exception as e:
+    print(f"❌ Bir hata oluştu: {e}")
