@@ -1,0 +1,153 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.feature_selection import SelectKBest, f_classif, RFE
+from google.colab import drive
+
+# --- 1. ORTAM HAZIRLIĞI VE VERİ YÜKLEME ---
+drive.mount('/content/drive')
+path = '/content/drive/MyDrive/fra_cleaned.csv'
+
+# RENK PALETİ
+PALETTE = ['#2E8B57', '#3CB371', '#20B2AA', '#4682B4', '#6A5ACD',
+           '#7B68EE', '#483D8B', '#5F9EA0', '#87CEEB', '#B0C4DE']
+
+# TABLO İÇİN MANUEL RENK AYARLARI (İstediğiniz gibi değiştirebilirsiniz)
+COLOR_SUCCESS = '#d4edda' # Açık yeşil (Seçilen)
+COLOR_WARNING = '#fff3cd' # Açık sarı (2/3 Oy)
+COLOR_DANGER = '#f8d7da'  # Açık kırmızı (Seçilmeyen)
+COLOR_CHAMPION = '#cce5ff' # Açık mavi (3/3 Şampiyon)
+
+try:
+    data_raw = pd.read_csv(path, sep=';', encoding='latin-1')
+    print("✅ 1. ADIM: Veri başarıyla yüklendi!")
+
+    # --- 2. VERİ SETİNİ İLK 10 MARKA İLE SINIRLANDIRMA ---
+    brand_counts = data_raw['Brand'].value_counts()
+    top_10_list = brand_counts.head(10).index.tolist()
+    data_filtered = data_raw[data_raw['Brand'].isin(top_10_list)].copy()
+
+    # --- 3. ÖN İŞLEME: SAYISAL DÖNÜŞÜMLER ---
+    if data_filtered['Rating Value'].dtype == 'object':
+        data_filtered['Rating Value'] = data_filtered['Rating Value'].str.replace(',', '.').astype(float)
+
+    # --- 4. KOPYALAMA VE EKSİK DEĞERLERİN DOLDURULMASI ---
+    df = data_filtered.copy()
+    cat_cols = df.select_dtypes('object').columns.tolist()
+    for col in cat_cols:
+        if not df[col].mode().empty:
+            df[col] = df[col].fillna(df[col].mode()[0])
+
+    num_cols = df.select_dtypes(include=[np.number]).columns
+    for col in num_cols:
+        df[col] = df[col].fillna(df[col].median())
+
+    # --- 5. HEDEF DEĞİŞKENİNİ ENCODE ETME ---
+    le_brand = LabelEncoder()
+    df['Brand_Encoded'] = le_brand.fit_transform(df['Brand'])
+
+    # --- 6. KATEGORİK ÖZELLİKLERİ ENCODE ETME ---
+    exclude_cols = ['Brand', 'Brand_Encoded', 'url', 'Perfume', 'Description']
+    feature_cols = [c for c in df.columns if c not in exclude_cols]
+
+    le_features = LabelEncoder()
+    for col in feature_cols:
+        if df[col].dtype == 'object':
+            df[col] = le_features.fit_transform(df[col].astype(str))
+
+    X = df[feature_cols]
+    y = df['Brand_Encoded']
+
+    # --- 7. TRAIN / TEST AYRIMI ---
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.20, random_state=42, stratify=y
+    )
+
+    # --- 8. STANDARDIZASYON ---
+    scaler = StandardScaler()
+    X_train_sc = scaler.fit_transform(X_train)
+    X_test_sc  = scaler.transform(X_test)
+
+    # --- 9. YÜKSEK KORELASYONLU ÖZELLİK ELEME ---
+    corr_matrix = pd.DataFrame(X_train_sc, columns=feature_cols).corr(method='pearson')
+    CORR_THRESHOLD = 0.90
+    upper_tri = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
+    high_corr_pairs = [
+        (col, row) for col in upper_tri.columns for row in upper_tri.index
+        if abs(upper_tri.loc[row, col]) > CORR_THRESHOLD
+    ]
+    drop_high_corr = list(set([p[1] for p in high_corr_pairs])) if high_corr_pairs else []
+    features_after_corr = [f for f in feature_cols if f not in drop_high_corr]
+
+    print('\n🚀 ÖZELLİK SEÇİMİ (FEATURE SELECTION) ALGORİTMALARI BAŞLATILIYOR...\n')
+
+    # --- A. SELECTKBEST (ANOVA F-TESTİ) ---
+    K_BEST = 10
+    selector_kb = SelectKBest(score_func=f_classif, k=K_BEST)
+    selector_kb.fit(X_train_sc, y_train)
+    selected_kb = np.array(feature_cols)[selector_kb.get_support()].tolist()
+
+    # --- B. RANDOM FOREST ÖZELLİK ÖNEMİ (Top 10) ---
+    rf_feat = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+    rf_feat.fit(X_train_sc, y_train)
+    importances = pd.DataFrame({'Özellik': feature_cols, 'Önem': rf_feat.feature_importances_})
+    selected_rf = importances.sort_values('Önem', ascending=False).head(10)['Özellik'].tolist()
+
+    # --- C. RFE (RECURSIVE FEATURE ELIMINATION) ---
+    rf_rfe = RandomForestClassifier(n_estimators=50, random_state=42, n_jobs=-1)
+    rfe = RFE(estimator=rf_rfe, n_features_to_select=10, step=1)
+    rfe.fit(X_train_sc, y_train)
+    selected_rfe = np.array(feature_cols)[rfe.support_].tolist()
+
+    # --- 10. ÖZELLİK SEÇİMİ KARŞILAŞTIRMA TABLOSU (OYLAMA MEKANİZMASI) ---
+    sets = {
+        'ANOVA F-Testi (SelectKBest)': set(selected_kb),
+        'RF Özellik Önemi (Top 10)': set(selected_rf),
+        'Recursive Feature Elim. (RFE)': set(selected_rfe),
+    }
+
+    comparison = pd.DataFrame(
+        {name: [('✅' if f in s else '❌') for f in feature_cols] for name, s in sets.items()},
+        index=feature_cols
+    )
+
+    # Oylama (Vote) Sayımı
+    comparison['Oy Sayısı'] = comparison.apply(lambda r: list(r.values).count('✅'), axis=1)
+    comparison['Durum (3/3)'] = comparison['Oy Sayısı'].apply(
+        lambda x: '🏆 Şampiyon Özellik' if x == 3 else ('⭐ Güçlü Aday' if x == 2 else 'Zayıf')
+    )
+
+    print('─── ÖZELLİK SEÇİMİ YÖNTEMLERİ KARŞILAŞTIRMA MATRİSİ ───')
+
+    # Tabloyu profesyonel şekilde renklendirme fonksiyonu
+    def style_comparison(val):
+        if val == '✅': return f'background-color: {COLOR_SUCCESS}; color: black; text-align: center;'
+        elif val == '❌': return f'background-color: {COLOR_DANGER}; color: gray; text-align: center;'
+        elif val == '🏆 Şampiyon Özellik': return f'background-color: {COLOR_CHAMPION}; font-weight: bold;'
+        elif val == '⭐ Güçlü Aday': return f'background-color: {COLOR_WARNING}; font-weight: bold;'
+        return ''
+
+    styled_table = (comparison.style
+                    .applymap(style_comparison)
+                    .set_properties(**{'border': '1px solid black', 'text-align': 'center'})
+                    .set_caption('Özellik Seçim Algoritmaları Konsensüs Tablosu (Voting)')
+                    .set_table_styles([{'selector': 'th', 'props': [('background-color', '#4682B4'), ('color', 'white'), ('font-size', '14px')]}]))
+
+    display(styled_table)
+
+    # --- 11. NİHAİ ÖZELLİK MATRİSİNİN (X) OLUŞTURULMASI ---
+    # En az 2 algoritmanın (⭐ veya 🏆) seçtiği özelliklerle devam edilir
+    selected_final = comparison[comparison['Oy Sayısı'] >= 2].index.tolist()
+
+    print(f'\n📌 Karar: En az 2 algoritma tarafından seçilen öznitelikler modellemeye dahil edilecektir.')
+    print(f'📌 Boyut Azaltımı: {len(feature_cols)} Özellik → {len(selected_final)} Özelliğe İndirildi.')
+    print(f'📌 Nihai Seçilen Özellik Seti: \n{selected_final}')
+
+except FileNotFoundError:
+    print("❌ Hata: Dosya belirtilen yolda bulunamadı. Lütfen yolu kontrol edin.")
+except Exception as e:
+    print(f"❌ Bir hata oluştu: {e}")
