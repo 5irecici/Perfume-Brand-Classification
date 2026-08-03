@@ -1,0 +1,230 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import scipy.cluster.hierarchy as shc
+from scipy import stats
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.cluster import KMeans, AgglomerativeClustering, DBSCAN
+from sklearn.metrics import silhouette_score
+from sklearn.decomposition import PCA
+from google.colab import drive
+
+# KULLANICI ÖZEL RENK PALETİ
+CUSTOM_PALETTE = ['#462506', '#9F6920', '#DAA755', '#E9C579', '#F1DEA8', '#2E8B57', '#4682B4']
+
+# --- WCSS (INERTIA) HESAPLAMA FONKSİYONU ---
+def calculate_wcss(X, labels):
+    wcss = 0
+    unique_labels = set(labels)
+    for label in unique_labels:
+        if label == -1:
+            continue
+        cluster_points = X[labels == label]
+        if len(cluster_points) > 0:
+            centroid = cluster_points.mean(axis=0)
+            wcss += np.sum((cluster_points - centroid)**2)
+    return wcss
+
+# --- 1. ORTAM HAZIRLIĞI VE VERİ YÜKLEME ---
+drive.mount('/content/drive')
+path = '/content/drive/MyDrive/fra_cleaned.csv'
+
+try:
+    data_raw = pd.read_csv(path, sep=';', encoding='latin-1')
+    print("✅ 1. ADIM: Veri başarıyla yüklendi!")
+
+    # --- 2. VERİ ÖN İŞLEME (GÖZETİMSİZ ÖĞRENME İÇİN) ---
+    brand_counts = data_raw['Brand'].value_counts()
+    top_10_list = brand_counts.head(10).index.tolist()
+    data_filtered = data_raw[data_raw['Brand'].isin(top_10_list)].copy()
+
+    if data_filtered['Rating Value'].dtype == 'object':
+        data_filtered['Rating Value'] = data_filtered['Rating Value'].str.replace(',', '.').astype(float)
+
+    df = data_filtered.copy()
+    for col in df.select_dtypes('object').columns:
+        if not df[col].mode().empty: df[col] = df[col].fillna(df[col].mode()[0])
+    for col in df.select_dtypes(include=[np.number]).columns:
+        df[col] = df[col].fillna(df[col].median())
+
+    # --- 3. ENCODING VE HEDEFİN AYRILMASI ---
+    le_brand = LabelEncoder()
+    y_true_labels = le_brand.fit_transform(df['Brand'])
+
+    exclude_cols = ['Brand', 'url', 'Perfume', 'Description']
+    feature_cols = [c for c in df.columns if c not in exclude_cols]
+
+    le_features = LabelEncoder()
+    for col in feature_cols:
+        if df[col].dtype == 'object':
+            df[col] = le_features.fit_transform(df[col].astype(str))
+
+    X_clustering = df[feature_cols]
+
+    # --- 4. STANDARDIZASYON ---
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_clustering)
+    print(f"🚀 ÖN İŞLEME TAMAM. Kümelemeye Giren Boyut: {X_scaled.shape}")
+
+    # =========================================================================
+    # YÖNTEM 1: K-MEANS HİPERPARAMETRE OPTİMİZASYONU
+    # =========================================================================
+    print("\n🚀 YÖNTEM 1: K-Means HPO Başlıyor...")
+
+    best_k_kmeans = 2
+    best_score_kmeans = -1
+
+    for k in range(2, 11):
+        kmeans = KMeans(n_clusters=k, init='k-means++', random_state=42, n_init=10)
+        labels = kmeans.fit_predict(X_scaled)
+        score = silhouette_score(X_scaled, labels)
+
+        if score > best_score_kmeans:
+            best_score_kmeans = score
+            best_k_kmeans = k
+
+    print(f"✅ K-Means En İyi Parametre: K = {best_k_kmeans}")
+    kmeans_opt = KMeans(n_clusters=best_k_kmeans, init='k-means++', random_state=42, n_init=10)
+    clusters_kmeans = kmeans_opt.fit_predict(X_scaled)
+
+    # =========================================================================
+    # YÖNTEM 2: HİYERARŞİK KÜMELEME HİPERPARAMETRE OPTİMİZASYONU
+    # =========================================================================
+    print("\n🚀 YÖNTEM 2: Hiyerarşik Kümeleme HPO Başlıyor...")
+
+    best_k_hc = 2
+    best_linkage = ''
+    best_metric = ''
+    best_score_hc = -1
+
+    for k in range(2, 11):
+        for linkage in ['ward', 'complete', 'average']:
+            metrics = ['euclidean'] if linkage == 'ward' else ['euclidean', 'manhattan', 'cosine']
+            for metric in metrics:
+                hc = AgglomerativeClustering(n_clusters=k, metric=metric, linkage=linkage)
+                labels = hc.fit_predict(X_scaled)
+                score = silhouette_score(X_scaled, labels)
+
+                if score > best_score_hc:
+                    best_score_hc = score
+                    best_k_hc = k
+                    best_linkage = linkage
+                    best_metric = metric
+
+    print(f"✅ Hiyerarşik En İyi Parametreler: K = {best_k_hc}, Linkage = {best_linkage}, Metric = {best_metric}")
+    hc_opt = AgglomerativeClustering(n_clusters=best_k_hc, metric=best_metric, linkage=best_linkage)
+    clusters_hierarchical = hc_opt.fit_predict(X_scaled)
+
+    # =========================================================================
+    # YÖNTEM 3: DBSCAN HİPERPARAMETRE OPTİMİZASYONU
+    # =========================================================================
+    print("\n🚀 YÖNTEM 3: DBSCAN HPO Başlıyor...")
+
+    best_eps = 0.5
+    best_min_samples = 5
+    best_score_dbscan = -1
+    best_clusters_dbscan = None
+
+    for eps_val in np.arange(0.5, 4.0, 0.5):
+        for min_samples_val in [3, 5, 7, 10]:
+            db = DBSCAN(eps=eps_val, min_samples=min_samples_val, metric='euclidean')
+            temp_clusters = db.fit_predict(X_scaled)
+
+            n_temp_clusters = len(set(temp_clusters)) - (1 if -1 in temp_clusters else 0)
+            if n_temp_clusters > 1:
+                score = silhouette_score(X_scaled, temp_clusters)
+                if score > best_score_dbscan:
+                    best_score_dbscan = score
+                    best_eps = eps_val
+                    best_min_samples = min_samples_val
+                    best_clusters_dbscan = temp_clusters
+
+    if best_clusters_dbscan is not None:
+        clusters_dbscan = best_clusters_dbscan
+        print(f"✅ DBSCAN En İyi Parametreler: eps = {best_eps}, min_samples = {best_min_samples}")
+    else:
+        print("⚠️ DBSCAN anlamlı kümeler bulamadı. Fallback değeri kullanılıyor.")
+        db_fallback = DBSCAN(eps=2.5, min_samples=5)
+        clusters_dbscan = db_fallback.fit_predict(X_scaled)
+
+    # =========================================================================
+    # MATEMATİKSEL DOĞRULAMA (SILHOUETTE)
+    # =========================================================================
+    print("\n─── 🏆 BÜYÜK FİNAL: Modellerin Optimum Parametrelerle Kıyaslanması ───")
+
+    pca_2d = PCA(n_components=2, random_state=42)
+    X_pca = pca_2d.fit_transform(X_scaled)
+
+    fig, axes = plt.subplots(1, 3, figsize=(20, 6))
+
+    # Üç modelin etiketlerini sözlükte tutuyoruz (ANOVA için)
+    model_labels_dict = {
+        "K-Means": clusters_kmeans,
+        "Hiyerarşik": clusters_hierarchical,
+        "DBSCAN": clusters_dbscan
+    }
+
+    models_info = [
+        ("K-Means", clusters_kmeans, f"K={best_k_kmeans}"),
+        ("Hiyerarşik", clusters_hierarchical, f"K={best_k_hc}\n{best_linkage}/{best_metric}"),
+        ("DBSCAN", clusters_dbscan, f"eps={best_eps}\nmin_s={best_min_samples}")
+    ]
+
+    for i, (name, cluster_labels, params) in enumerate(models_info):
+        if len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0) > 1:
+            sil_score = silhouette_score(X_scaled, cluster_labels)
+        else:
+            sil_score = 0.0
+
+        sns.scatterplot(x=X_pca[:, 0], y=X_pca[:, 1], hue=cluster_labels, palette='tab10', ax=axes[i], s=50, alpha=0.8)
+        axes[i].set_title(f"{name}\n{params.replace(chr(10), ' ')}\nSil: {sil_score:.3f}", fontweight='bold', color=CUSTOM_PALETTE[0], fontsize=11)
+        axes[i].set_xlabel('PCA Bileşeni 1')
+        axes[i].set_ylabel('PCA Bileşeni 2')
+
+    plt.suptitle('PCA İle 2 Boyutlu Uzayda Optimize Edilmiş Küme Yapıları', fontsize=16, fontweight='bold', y=1.05)
+    plt.tight_layout()
+    plt.show()
+
+    # =========================================================================
+    # DIŞSAL (İSTATİSTİKSEL) DOĞRULAMA: HPO SONRASI DİNAMİK ANOVA TESTİ 🟢
+    # =========================================================================
+    print("\n🚀 KÜMELERİN İSTATİSTİKSEL DOĞRULANMASI (HPO Sonrası Tüm Modeller İçin ANOVA)...")
+
+    anova_results = []
+
+    for i, col in enumerate(feature_cols):
+        row_data = {'Özellik (Feature)': col}
+
+        for model_name, labels in model_labels_dict.items():
+            # DBSCAN gürültülerini (-1) dışarıda bırak
+            valid_clusters = [c for c in set(labels) if c != -1]
+
+            # ANOVA için en az 2 küme şartı
+            if len(valid_clusters) >= 2:
+                cluster_groups = [X_scaled[labels == k, i] for k in valid_clusters]
+                f_stat, p_val = stats.f_oneway(*cluster_groups)
+
+                row_data[f'{model_name} F-Skoru'] = round(f_stat, 2)
+                row_data[f'{model_name} Anlamlı?'] = '✅' if p_val < 0.05 else '❌'
+            else:
+                row_data[f'{model_name} F-Skoru'] = 0.0
+                row_data[f'{model_name} Anlamlı?'] = '⚠️ Yetersiz'
+
+        anova_results.append(row_data)
+
+    df_anova = pd.DataFrame(anova_results)
+    df_anova = df_anova.sort_values(by='K-Means F-Skoru', ascending=False)
+
+    print("\n─── 🏆 OPTİMİZE EDİLMİŞ ANOVA F-Testi Karşılaştırma Tablosu ───")
+
+    display(df_anova.style
+            .applymap(lambda v: f'background-color: {CUSTOM_PALETTE[5]}; color: white; font-weight: bold;' if v == '✅' else '', subset=['K-Means Anlamlı?', 'Hiyerarşik Anlamlı?', 'DBSCAN Anlamlı?'])
+            .applymap(lambda v: 'background-color: #ffe6e6; color: black;' if v == '❌' else '')
+            .set_caption('HPO Sonrası Optimize Modellerin Özellik Varyans Analizi (F-Skorları)')
+            .set_table_styles([{'selector': 'th', 'props': [('background-color', CUSTOM_PALETTE[0]), ('color', 'white')]}]))
+
+except FileNotFoundError:
+    print("❌ Hata: Dosya belirtilen yolda bulunamadı. Lütfen yolu kontrol edin.")
+except Exception as e:
+    print(f"❌ Bir hata oluştu: {e}")
