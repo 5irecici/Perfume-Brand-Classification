@@ -1,0 +1,250 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.model_selection import train_test_split, cross_val_score, RandomizedSearchCV # 🟢 Optimizasyon Eklendi
+from imblearn.over_sampling import SMOTE
+from imblearn.pipeline import Pipeline as ImbPipeline
+from sklearn.svm import SVC
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.feature_selection import SelectKBest, f_classif, RFE
+from sklearn.metrics import (accuracy_score, f1_score, precision_score,
+                             recall_score, roc_auc_score, classification_report)
+from google.colab import drive
+
+# --- 1. ORTAM HAZIRLIĞI VE VERİ YÜKLEME ---
+drive.mount('/content/drive')
+path = '/content/drive/MyDrive/fra_cleaned.csv'
+
+CUSTOM_PALETTE = ['#462506', '#9F6920', '#DAA755', '#E9C579', '#F1DEA8']
+SEED = 42
+
+try:
+    data_raw = pd.read_csv(path, sep=';', encoding='latin-1')
+    print("✅ 1. ADIM: Veri başarıyla yüklendi!")
+
+    # --- 2. VERİ SETİNİ İLK 10 MARKA İLE SINIRLANDIRMA ---
+    brand_counts = data_raw['Brand'].value_counts()
+    top_10_list = brand_counts.head(10).index.tolist()
+    data_filtered = data_raw[data_raw['Brand'].isin(top_10_list)].copy()
+
+    # --- 3. ÖN İŞLEME: SAYISAL DÖNÜŞÜMLER ---
+    if data_filtered['Rating Value'].dtype == 'object':
+        data_filtered['Rating Value'] = data_filtered['Rating Value'].str.replace(',', '.').astype(float)
+
+    # --- 4. KOPYALAMA VE EKSİK DEĞERLERİN DOLDURULMASI ---
+    df = data_filtered.copy()
+    cat_cols = df.select_dtypes('object').columns.tolist()
+    for col in cat_cols:
+        if not df[col].mode().empty:
+            df[col] = df[col].fillna(df[col].mode()[0])
+
+    num_cols = df.select_dtypes(include=[np.number]).columns
+    for col in num_cols:
+        df[col] = df[col].fillna(df[col].median())
+
+    # --- 5. HEDEF DEĞİŞKENİNİ ENCODE ETME ---
+    le_brand = LabelEncoder()
+    df['Brand_Encoded'] = le_brand.fit_transform(df['Brand'])
+
+    # --- 6. GÜVENLİ KATEGORİK ENCODING ---
+    exclude_cols = ['Brand', 'Brand_Encoded', 'url', 'Perfume', 'Description']
+    feature_cols = [c for c in df.columns if c not in exclude_cols]
+
+    for col in feature_cols:
+        if df[col].dtype == 'object':
+            le_temp = LabelEncoder()
+            df[col] = le_temp.fit_transform(df[col].astype(str))
+
+    X = df[feature_cols]
+    y = df['Brand_Encoded']
+
+    # --- 7. TRAIN / TEST AYRIMI ---
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.20, random_state=SEED, stratify=y
+    )
+
+    # --- 8. GEÇİCİ ÖLÇEKLEME VE SMOTE (Sadece Özellik Seçimi İçin) ---
+    print('\n🚀 ÖZELLİK SEÇİMİ VE OYLAMA YAPILIYOR...')
+    scaler_temp = StandardScaler()
+    X_train_sc_temp = scaler_temp.fit_transform(X_train)
+
+    smote_temp = SMOTE(random_state=SEED)
+    X_train_sm_temp, y_train_sm_temp = smote_temp.fit_resample(X_train_sc_temp, y_train)
+
+    selector_kb = SelectKBest(score_func=f_classif, k=10).fit(X_train_sm_temp, y_train_sm_temp)
+    selected_kb = np.array(feature_cols)[selector_kb.get_support()].tolist()
+
+    gb_feat = GradientBoostingClassifier(n_estimators=50, random_state=SEED).fit(X_train_sm_temp, y_train_sm_temp)
+    importances = pd.DataFrame({'Özellik': feature_cols, 'Önem': gb_feat.feature_importances_})
+    selected_gb = importances.sort_values('Önem', ascending=False).head(10)['Özellik'].tolist()
+
+    rfe = RFE(estimator=gb_feat, n_features_to_select=10, step=1).fit(X_train_sm_temp, y_train_sm_temp)
+    selected_rfe = np.array(feature_cols)[rfe.support_].tolist()
+
+    sets = {'SelectKBest': set(selected_kb), 'GB Önemi': set(selected_gb), 'RFE': set(selected_rfe)}
+    comparison = pd.DataFrame({name: [('✅' if f in s else '❌') for f in feature_cols] for name, s in sets.items()}, index=feature_cols)
+    comparison['Oy Sayısı'] = comparison.apply(lambda r: list(r.values).count('✅'), axis=1)
+
+    selected_final = comparison[comparison['Oy Sayısı'] >= 2].index.tolist()
+    print(f'📌 Seçilen Nihai Özellik Seti ({len(selected_final)} Adet): {selected_final}')
+
+    # =========================================================================
+    # OPTİMİZASYON İÇİN ORTAK PARAMETRE UZAYI 🟢
+    # =========================================================================
+    param_grid = {
+        'svc__C': [0.1, 1, 10, 50],
+        'svc__gamma': ['scale', 'auto', 0.01, 0.1],
+        'svc__kernel': ['rbf', 'linear']
+    }
+
+    # =========================================================================
+    # 9. BASELINE MODEL: TÜM ÖZELLİKLER (HAM VERİ) HPO VE SIZDIRMAZ EĞİTİM
+    # =========================================================================
+    print('\n🚀 BASELINE MODEL (Tüm Özellikler) OPTİMİZE EDİLİYOR...')
+
+    pipeline_base = ImbPipeline([
+        ('scaler', StandardScaler()),
+        ('smote', SMOTE(random_state=SEED)),
+        ('svc', SVC(probability=True, random_state=SEED))
+    ])
+
+    random_search_base = RandomizedSearchCV(
+        estimator=pipeline_base, param_distributions=param_grid,
+        n_iter=10, cv=5, scoring='f1_macro', n_jobs=-1, random_state=SEED
+    )
+    random_search_base.fit(X_train, y_train)
+    best_pipeline_base = random_search_base.best_estimator_
+
+    print("   ✅ Baseline En İyi Parametreler:", {k.replace('svc__', ''): v for k, v in random_search_base.best_params_.items()})
+
+    cv_scores_base = cross_val_score(best_pipeline_base, X_train, y_train, cv=5, scoring='f1_macro', n_jobs=-1)
+
+    y_pred_base = best_pipeline_base.predict(X_test)
+    y_prob_base = best_pipeline_base.predict_proba(X_test)
+
+    test_metrics_base = {
+        'F1-Macro': f1_score(y_test, y_pred_base, average='macro'),
+        'AUC-ROC': roc_auc_score(y_test, y_prob_base, multi_class='ovr')
+    }
+
+    # =========================================================================
+    # 10. FİLTRELENMİŞ MODEL DETAYLI ANALİZİ (SADECE SEÇİLEN ÖZELLİKLER) 🟢
+    # =========================================================================
+    print('\n🚀 SEÇİLEN ÖZELLİKLERLE YENİ MODEL OPTİMİZE EDİLİYOR VE TEST EDİLİYOR...')
+
+    final_idx = [feature_cols.index(f) for f in selected_final]
+    X_train_final_raw = X_train.iloc[:, final_idx]
+    X_test_final_raw  = X_test.iloc[:, final_idx]
+
+    print(f'📌 Boyut Düşüşü: {X_train.shape[1]} özellik → {X_train_final_raw.shape[1]} özellik\n')
+
+    # 10.A: Seçilen Özellikler İçin HPO
+    pipeline_final = ImbPipeline([
+        ('scaler', StandardScaler()),
+        ('smote', SMOTE(random_state=SEED)),
+        ('svc', SVC(probability=True, random_state=SEED))
+    ])
+
+    random_search_final = RandomizedSearchCV(
+        estimator=pipeline_final, param_distributions=param_grid,
+        n_iter=10, cv=5, scoring='f1_macro', n_jobs=-1, random_state=SEED
+    )
+    random_search_final.fit(X_train_final_raw, y_train)
+    best_pipeline_final = random_search_final.best_estimator_
+
+    print("   ✅ Filtrelenmiş Model En İyi Parametreler:", {k.replace('svc__', ''): v for k, v in random_search_final.best_params_.items()})
+
+    # 10.B: Sızdırmaz 5-Fold CV (Optimize Seçilen Özellikler)
+    cv_scores_final = cross_val_score(best_pipeline_final, X_train_final_raw, y_train, cv=5, scoring='f1_macro', n_jobs=-1)
+
+    df_cv_final = pd.DataFrame({
+        'Kat (Fold)': [f'Fold {i+1}' for i in range(5)],
+        'CV F1-Macro Skoru': cv_scores_final.round(4)
+    })
+    summary_final = pd.DataFrame([{
+        'Kat (Fold)': 'Ortalama ± Std',
+        'CV F1-Macro Skoru': f'{cv_scores_final.mean():.4f} ± {cv_scores_final.std():.4f}'
+    }])
+    df_cv_final_display = pd.concat([df_cv_final, summary_final], ignore_index=True)
+
+    print(f'\n─── 5-Fold CV Sonuçları (Sızdırmaz Optimize SVM | Seçilen {len(selected_final)} Özellik) ───')
+    display(df_cv_final_display.style
+            .set_caption(f'Dürüst 5-Fold Çapraz Doğrulama — Seçilen Özellikler (Optimize SVM)')
+            .applymap(lambda v: f'font-weight: bold; background-color: {CUSTOM_PALETTE[4]}; color: {CUSTOM_PALETTE[0]};'
+                      if isinstance(v, str) and '±' in v else ''))
+
+    # 10.C: Test Seti Detay Tablosu
+    y_pred_final = best_pipeline_final.predict(X_test_final_raw)
+    y_prob_final = best_pipeline_final.predict_proba(X_test_final_raw)
+
+    test_metrics_final = {
+        'Accuracy (Doğruluk)'  : accuracy_score(y_test, y_pred_final),
+        'F1-Score (Macro)'     : f1_score(y_test, y_pred_final, average='macro'),
+        'Precision (Kesinlik)' : precision_score(y_test, y_pred_final, average='macro', zero_division=0),
+        'Recall (Duyarlılık)'  : recall_score(y_test, y_pred_final, average='macro'),
+        'AUC-ROC (Macro OVR)'  : roc_auc_score(y_test, y_prob_final, multi_class='ovr')
+    }
+
+    df_test_final = pd.DataFrame([{'Metrik': k, 'Değer': round(v, 4)} for k, v in test_metrics_final.items()])
+
+    print(f'\n─── Test Seti Sonuçları (Seçilen {len(selected_final)} Özellik | Optimize SVM) ───')
+    display(df_test_final.style
+            .set_properties(**{'background-color': CUSTOM_PALETTE[3], 'color': CUSTOM_PALETTE[0], 'font-weight': 'bold'})
+            .set_caption(f'Test Seti Performans Metrikleri — Filtrelenmiş Optimize SVM Modeli'))
+
+    # 10.D: CV vs Test Karşılaştırma (Overfitting Kontrolü)
+    df_compare_final = pd.DataFrame({
+        'Metrik'          : ['F1-Score (Macro)'],
+        'Optimize CV Skoru' : [round(cv_scores_final.mean(), 4)],
+        'Test Skoru'      : [round(test_metrics_final['F1-Score (Macro)'], 4)],
+        'Fark (Sapma)'    : [round(abs(cv_scores_final.mean() - test_metrics_final['F1-Score (Macro)']), 4)]
+    })
+
+    print('\n─── CV Skoru vs Test Skoru Karşılaştırması (Seçilen Özellikler) ───')
+    def style_compare(val, is_score=True):
+        if is_score: return f'background-color: {CUSTOM_PALETTE[2]}; color: {CUSTOM_PALETTE[0]}; font-weight:bold;'
+        else: return f'background-color: {CUSTOM_PALETTE[1]}; color: #fff; font-weight:bold;'
+
+    display(df_compare_final.style
+            .applymap(lambda v: style_compare(v, True), subset=['Optimize CV Skoru', 'Test Skoru'])
+            .applymap(lambda v: style_compare(v, False), subset=['Fark (Sapma)'])
+            .set_caption('Optimize CV ve Test Metrikleri — Overfitting Kontrolü'))
+
+    # =========================================================================
+    # 11. HAM VERİ VS SEÇİLEN ÖZELLİKLER GENEL KARŞILAŞTIRMA (BÜYÜK FİNAL)
+    # =========================================================================
+    print('\n─── Tüm Özellikler (Baseline) vs Seçilen Özellikler Genel Kıyaslaması (Optimize SVM) ───')
+
+    df_genel = pd.DataFrame({
+        'Veri Temsili'   : ['Tüm Özellikler (Baseline Optimize)', f'Seçilen Özellikler ({len(selected_final)} adet Optimize)'],
+        'Özellik Sayısı' : [X_train.shape[1], len(selected_final)],
+        'Dürüst CV F1 (Macro)'  : [round(cv_scores_base.mean(), 4), round(cv_scores_final.mean(), 4)],
+        'Test F1 (Macro)': [round(test_metrics_base['F1-Macro'], 4), round(test_metrics_final['F1-Score (Macro)'], 4)],
+        'Sapma (CV-Test)': [round(abs(cv_scores_base.mean() - test_metrics_base['F1-Macro']), 4),
+                            round(abs(cv_scores_final.mean() - test_metrics_final['F1-Score (Macro)']), 4)],
+        'AUC-ROC (OVR)'  : [round(test_metrics_base['AUC-ROC'], 4), round(test_metrics_final['AUC-ROC (Macro OVR)'], 4)],
+    })
+
+    display(df_genel.style
+            .highlight_max(subset=['Dürüst CV F1 (Macro)', 'Test F1 (Macro)', 'AUC-ROC (OVR)'], color=CUSTOM_PALETTE[2])
+            .highlight_min(subset=['Sapma (CV-Test)'], color=CUSTOM_PALETTE[2])
+            .set_properties(**{'border': f'1px solid {CUSTOM_PALETTE[0]}', 'text-align': 'center'})
+            .set_caption('🏆 Ham Veri vs Özellik Seçimi — Optimize Sızdırmaz SVM Karşılaştırması')
+            .set_table_styles([{'selector': 'th', 'props': [('background-color', CUSTOM_PALETTE[0]), ('color', 'white')]}]))
+
+    diff_final = df_genel['Sapma (CV-Test)'].iloc[1]
+    diff_base = df_genel['Sapma (CV-Test)'].iloc[0]
+
+    print(f'\n📌 Baseline Sapması: {diff_base:.4f} | Seçilen Özelliklerin Sapması: {diff_final:.4f}')
+
+    if diff_final < diff_base:
+        print('   ✅ Başarılı! Boyut indirgeme, optimize SVM modelinin aşırı öğrenmesini (overfitting) Baseline modele göre daha iyi engellemiş ve sapmayı düşürmüştür.')
+    else:
+        print('   ⚠️ Özellik seçimi modeli hızlandırmış olsa da, Baseline modele göre daha yüksek sapma üretmiştir. Eksik özellikler modelin genelleme yeteneğini zorluyor olabilir.')
+
+except FileNotFoundError:
+    print("❌ Hata: Dosya belirtilen yolda bulunamadı. Lütfen yolu kontrol edin.")
+except Exception as e:
+    print(f"❌ Bir hata oluştu: {e}")
