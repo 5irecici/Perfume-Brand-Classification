@@ -124,3 +124,7 @@ Stage 1: A Baseline Random Forest trained on all raw features.
 Stage 2: A dimensionality-reduced model utilizing an Ensemble Voting mechanism for feature selection.
 Stage 3: A fully Optimized model where the filtered feature space undergoes hyperparameter tuning via RandomizedSearchCV.
 The final performance matrix provides transparent empirical evidence of this evolution. By strictly confining data balancing (SMOTE) to the training folds, the metrics prove that the combination of feature selection and hyperparameter tuning drastically reduces the generalization gap, resulting in a highly reliable predictive engine.
+# Dimensionality Reduction & Leakage-Free Benchmarking:
+A primary challenge in this fragrance classification project was mitigating the "curse of dimensionality" and preventing the Random Forest engine from overfitting. To resolve this, a comprehensive and strictly leakage-free benchmarking architecture was designed using imblearn pipelines.
+
+Three distinct modeling strategies were evaluated: a Raw Feature Baseline, an Ensemble Feature Selection approach (voting mechanism), and a Principal Component Analysis (PCA) approach retaining 90% variance. By isolating the SMOTE and PCA transformations exclusively within the cross-validation training folds, we obtained completely honest performance metrics. The final comparative matrix transparently illustrates how each strategy impacts model complexity, AUC-ROC performance, and the generalization gap, ultimately identifying the most robust predictive architecture.
