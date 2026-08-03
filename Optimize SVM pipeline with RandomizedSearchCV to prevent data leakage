@@ -1,0 +1,187 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.model_selection import train_test_split, cross_val_score, RandomizedSearchCV # 🟢 RandomizedSearchCV Eklendi
+from sklearn.pipeline import Pipeline
+from sklearn.svm import SVC
+from sklearn.metrics import (accuracy_score, f1_score, precision_score,
+                             recall_score, roc_auc_score, classification_report)
+from google.colab import drive
+
+# --- 1. ORTAM HAZIRLIĞI VE VERİ YÜKLEME ---
+drive.mount('/content/drive')
+path = '/content/drive/MyDrive/fra_cleaned.csv'
+
+# KULLANICI ÖZEL RENK PALETİ
+CUSTOM_PALETTE = ['#462506', '#9F6920', '#DAA755', '#E9C579', '#F1DEA8']
+SEED = 42
+
+try:
+    # Veriyi yükleme
+    data_raw = pd.read_csv(path, sep=';', encoding='latin-1')
+    print("✅ 1. ADIM: Veri başarıyla yüklendi!")
+
+    # --- 2. VERİ SETİNİ İLK 10 MARKA İLE SINIRLANDIRMA ---
+    brand_counts = data_raw['Brand'].value_counts()
+    top_10_list = brand_counts.head(10).index.tolist()
+    data_filtered = data_raw[data_raw['Brand'].isin(top_10_list)].copy()
+
+    # --- 3. ÖN İŞLEME: SAYISAL DÖNÜŞÜMLER ---
+    if data_filtered['Rating Value'].dtype == 'object':
+        data_filtered['Rating Value'] = data_filtered['Rating Value'].str.replace(',', '.').astype(float)
+
+    # --- 4. KOPYALAMA VE EKSİK DEĞERLERİN DOLDURULMASI ---
+    df = data_filtered.copy()
+
+    cat_cols = df.select_dtypes('object').columns.tolist()
+    for col in cat_cols:
+        if not df[col].mode().empty:
+            df[col] = df[col].fillna(df[col].mode()[0])
+
+    num_cols = df.select_dtypes(include=[np.number]).columns
+    for col in num_cols:
+        df[col] = df[col].fillna(df[col].median())
+
+    # --- 5. HEDEF DEĞİŞKENİNİ ENCODE ETME ---
+    le_brand = LabelEncoder()
+    df['Brand_Encoded'] = le_brand.fit_transform(df['Brand'])
+
+    # --- 6. GÜVENLİ KATEGORİK ÖZELLİK ENCODING ---
+    exclude_cols = ['Brand', 'Brand_Encoded', 'url', 'Perfume', 'Description']
+    feature_cols = [c for c in df.columns if c not in exclude_cols]
+
+    for col in feature_cols:
+        if df[col].dtype == 'object':
+            le_temp = LabelEncoder()
+            df[col] = le_temp.fit_transform(df[col].astype(str))
+
+    X = df[feature_cols]
+    y = df['Brand_Encoded']
+
+    print(f'\n🚀 ÖZELLİK MATRİSLERİ OLUŞTURULDU (Boyut: {X.shape})')
+
+    # --- 7. TRAIN / TEST AYRIMI ---
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.20, random_state=SEED, stratify=y
+    )
+    print('🚀 EĞİTİM VE TEST SETLERİ AYRILDI')
+
+    # --- 8. SIZDIRMAZ PIPELINE VE HPO KURULUMU --- 🟢
+    print('\n🚀 SIZDIRMAZ PIPELINE VE HİPERPARAMETRE OPTİMİZASYONU BAŞLIYOR...')
+
+    # 1. Pipeline Tanımlaması
+    svm_pipeline = Pipeline([
+        ('scaler', StandardScaler()),
+        ('svc', SVC(probability=True, random_state=SEED))
+    ])
+
+    # 2. Aranacak Parametre Uzayı (Pipeline formatında: ad__parametre)
+    param_grid = {
+        'svc__C': [0.1, 1, 10, 50, 100],          # Hata toleransı / Ceza
+        'svc__gamma': ['scale', 'auto', 0.01, 0.1, 1], # Kernel etki çapı (RBF için)
+        'svc__kernel': ['rbf', 'linear']          # Doğrusal mı yoksa kıvrımlı zarlar mı?
+    }
+
+    # 3. RandomizedSearchCV ile Optimizasyon (Zaman tasarrufu için 15 iterasyon seçildi)
+    print('⏳ Parametre kombinasyonları taranıyor (Çok çekirdek aktif)...')
+    random_search = RandomizedSearchCV(
+        estimator=svm_pipeline,
+        param_distributions=param_grid,
+        n_iter=15,
+        cv=5,
+        scoring='f1_macro',
+        n_jobs=-1,
+        random_state=SEED,
+        verbose=1
+    )
+
+    random_search.fit(X_train, y_train)
+
+    print("\n🏆 EN İYİ PARAMETRELER BULUNDU:")
+    for k, v in random_search.best_params_.items():
+        print(f"   - {k.replace('svc__', '')}: {v}")
+
+    # Şampiyon Modeli Değişkene Atama
+    best_svm_pipeline = random_search.best_estimator_
+
+    # --- 9. OPTİMİZE MODEL İLE 5-FOLD CROSS VALIDATION ---
+    print('\n⏳ Şampiyon Model ile Sızdırmaz Çapraz Doğrulama yapılıyor...')
+
+    cv_f1_scores = cross_val_score(best_svm_pipeline, X_train, y_train, cv=5, scoring='f1_macro')
+    cv_acc_scores = cross_val_score(best_svm_pipeline, X_train, y_train, cv=5, scoring='accuracy')
+
+    df_cv = pd.DataFrame({
+        'Kat (Fold)' : [f'Fold {i+1}' for i in range(5)],
+        'CV F1-Macro Skoru' : cv_f1_scores.round(4),
+        'CV Accuracy Skoru' : cv_acc_scores.round(4)
+    })
+
+    summary = pd.DataFrame([{
+        'Kat (Fold)' : 'Ortalama ± Std',
+        'CV F1-Macro Skoru' : f'{cv_f1_scores.mean():.4f} ± {cv_f1_scores.std():.4f}',
+        'CV Accuracy Skoru': f'{cv_acc_scores.mean():.4f} ± {cv_acc_scores.std():.4f}'
+    }])
+    df_cv_display = pd.concat([df_cv, summary], ignore_index=True)
+
+    print('\n─── Optimize 5-Fold CV Sonuçları (Sızdırmaz SVM) ───')
+    display(df_cv_display.style
+            .set_caption('Optimize 5-Fold Çapraz Doğrulama — SVM')
+            .applymap(lambda v: f'font-weight: bold; background-color: {CUSTOM_PALETTE[4]}; color: {CUSTOM_PALETTE[0]};'
+                      if isinstance(v, str) and '±' in v else ''))
+
+    # --- 10. TEST SETİ DEĞERLENDİRMESİ ---
+    print('\n🚀 TEST SETİ ÜZERİNDE TAHMİNLER YAPILIYOR...')
+
+    # best_svm_pipeline zaten tüm X_train ile eğitilmiş durumdadır (refit=True varsayılan)
+    y_pred_svm = best_svm_pipeline.predict(X_test)
+    y_prob_svm = best_svm_pipeline.predict_proba(X_test)
+
+    # Sınıflandırma Metrikleri
+    test_metrics = {
+        'Accuracy (Doğruluk)'    : accuracy_score(y_test, y_pred_svm),
+        'F1-Score (Macro)'       : f1_score(y_test, y_pred_svm, average='macro'),
+        'Precision (Kesinlik)'   : precision_score(y_test, y_pred_svm, average='macro', zero_division=0),
+        'Recall (Duyarlılık)'    : recall_score(y_test, y_pred_svm, average='macro'),
+        'AUC-ROC (Macro OVR)'    : roc_auc_score(y_test, y_prob_svm, multi_class='ovr')
+    }
+
+    df_test = pd.DataFrame([{'Metrik' : k, 'Değer'  : round(v, 4)} for k, v in test_metrics.items()])
+
+    print('\n─── Test Seti Sonuçları (Optimize SVM) ───')
+    display(df_test.style
+            .set_properties(**{'background-color': CUSTOM_PALETTE[3], 'color': CUSTOM_PALETTE[0], 'font-weight': 'bold'})
+            .set_caption('Optimize Test Seti Performans Metrikleri'))
+
+    # --- 11. CV vs TEST KARŞILAŞTIRMA TABLOSU (OVERFITTING KONTROLÜ) ---
+    df_compare_cv = pd.DataFrame({
+        'Metrik'          : ['F1-Score (Macro)'],
+        'Optimize CV Skoru': [round(cv_f1_scores.mean(), 4)],
+        'Test Skoru'      : [round(test_metrics['F1-Score (Macro)'], 4)],
+        'Fark (Sapma)'    : [round(abs(cv_f1_scores.mean() - test_metrics['F1-Score (Macro)']), 4)]
+    })
+
+    print('\n─── CV Skoru vs Test Skoru Karşılaştırması ───')
+
+    def style_compare(val, is_score=True):
+        if is_score: return f'background-color: {CUSTOM_PALETTE[2]}; color: {CUSTOM_PALETTE[0]}; font-weight:bold;'
+        else: return f'background-color: {CUSTOM_PALETTE[1]}; color: #fff; font-weight:bold;'
+
+    styled_compare = (df_compare_cv.style
+                      .applymap(lambda v: style_compare(v, True), subset=['Optimize CV Skoru', 'Test Skoru'])
+                      .applymap(lambda v: style_compare(v, False), subset=['Fark (Sapma)'])
+                      .set_caption('Optimize SVM Modeli — Overfitting Kontrolü'))
+    display(styled_compare)
+
+    diff = df_compare_cv['Fark (Sapma)'].iloc[0]
+
+    if diff < 0.05:
+        print(f'\n✅ HARİKA! Sızdırmaz CV ve Test skoru birbirine çok yakın (Fark: {diff:.4f}). SVM başarıyla genelleme yapmıştır.')
+    else:
+        print(f'\n⚠️ Test ve CV skoru arasındaki fark yüksek (Fark: {diff:.4f}). Veri seti dengesizliği veya aykırı değerler zorluk yaratıyor olabilir.')
+
+except FileNotFoundError:
+    print("❌ Hata: Dosya belirtilen yolda bulunamadı. Lütfen yolu kontrol edin.")
+except Exception as e:
+    print(f"❌ Bir hata oluştu: {e}")
