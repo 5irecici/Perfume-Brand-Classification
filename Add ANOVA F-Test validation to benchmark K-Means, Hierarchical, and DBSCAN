@@ -1,0 +1,207 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import scipy.cluster.hierarchy as shc
+from scipy import stats
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.cluster import KMeans, AgglomerativeClustering, DBSCAN
+from sklearn.metrics import silhouette_score
+from sklearn.decomposition import PCA
+from google.colab import drive
+
+# KULLANICI ÖZEL RENK PALETİ
+CUSTOM_PALETTE = ['#462506', '#9F6920', '#DAA755', '#E9C579', '#F1DEA8', '#2E8B57', '#4682B4']
+
+# --- 1. ORTAM HAZIRLIĞI VE VERİ YÜKLEME ---
+drive.mount('/content/drive')
+path = '/content/drive/MyDrive/fra_cleaned.csv'
+
+try:
+    data_raw = pd.read_csv(path, sep=';', encoding='latin-1')
+    print("✅ 1. ADIM: Veri başarıyla yüklendi!")
+
+    # --- 2. VERİ ÖN İŞLEME (GÖZETİMSİZ ÖĞRENME İÇİN) ---
+    brand_counts = data_raw['Brand'].value_counts()
+    top_10_list = brand_counts.head(10).index.tolist()
+    data_filtered = data_raw[data_raw['Brand'].isin(top_10_list)].copy()
+
+    if data_filtered['Rating Value'].dtype == 'object':
+        data_filtered['Rating Value'] = data_filtered['Rating Value'].str.replace(',', '.').astype(float)
+
+    df = data_filtered.copy()
+    for col in df.select_dtypes('object').columns:
+        if not df[col].mode().empty: df[col] = df[col].fillna(df[col].mode()[0])
+    for col in df.select_dtypes(include=[np.number]).columns:
+        df[col] = df[col].fillna(df[col].median())
+
+    # --- 3. ENCODING VE HEDEFİN AYRILMASI ---
+    le_brand = LabelEncoder()
+    y_true_labels = le_brand.fit_transform(df['Brand'])
+
+    exclude_cols = ['Brand', 'url', 'Perfume', 'Description']
+    feature_cols = [c for c in df.columns if c not in exclude_cols]
+
+    le_features = LabelEncoder()
+    for col in feature_cols:
+        if df[col].dtype == 'object':
+            df[col] = le_features.fit_transform(df[col].astype(str))
+
+    X_clustering = df[feature_cols]
+
+    # --- 4. STANDARDIZASYON ---
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_clustering)
+    print(f"🚀 ÖN İŞLEME TAMAM. Kümelemeye Giren Boyut: {X_scaled.shape}")
+
+    # =========================================================================
+    # YÖNTEM 1: K-MEANS, DİRSEK (ELBOW) YÖNTEMİ VE INERTIA METRİĞİ
+    # =========================================================================
+    print("\n🚀 YÖNTEM 1: K-Means Modeli ve Dirsek (Elbow) Analizi Başlıyor...")
+
+    wcss = []
+    max_k = 15
+
+    for i in range(1, max_k + 1):
+        kmeans = KMeans(n_clusters=i, init='k-means++', random_state=42, n_init=10)
+        kmeans.fit(X_scaled)
+        wcss.append(kmeans.inertia_)
+
+    # Dirsek Grafiği
+    plt.figure(figsize=(10, 5))
+    plt.plot(range(1, max_k + 1), wcss, marker='o', linestyle='--', color=CUSTOM_PALETTE[1], linewidth=2, markersize=8)
+    plt.title('K-Means: Dirsek (Elbow) Yöntemi ile Optimum K Bulma', fontsize=14, fontweight='bold', color=CUSTOM_PALETTE[0])
+    plt.xlabel('Küme Sayısı (K)', fontsize=12)
+    plt.ylabel('WCSS (Küme İçi Varyans / Inertia)', fontsize=12)
+
+    # 🟢 SABİT PARAMETRE: K=5
+    OPTIMUM_K = 5
+    plt.axvline(x=OPTIMUM_K, color=CUSTOM_PALETTE[2], linestyle='-', linewidth=2, label=f'Seçilen K = {OPTIMUM_K}')
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.show()
+
+    # K-Means Model Eğitimi
+    kmeans_opt = KMeans(n_clusters=OPTIMUM_K, init='k-means++', random_state=42, n_init=10)
+    clusters_kmeans = kmeans_opt.fit_predict(X_scaled)
+    final_inertia = kmeans_opt.inertia_
+    print(f"📌 K-Means Optimum K ({OPTIMUM_K}) için Inertia (Küme İçi Hata): {final_inertia:.2f}")
+
+    # =========================================================================
+    # YÖNTEM 2: HİYERARŞİK KÜMELEME VE DENDROGRAM
+    # =========================================================================
+    print("\n🚀 YÖNTEM 2: Hiyerarşik Kümeleme ve Dendrogram Oluşturuluyor...")
+
+    plt.figure(figsize=(12, 6))
+    plt.title("Hiyerarşik Kümeleme: Dendrogram (Ward Linkage, Öklid Mesafesi)", fontsize=14, fontweight='bold', color=CUSTOM_PALETTE[0])
+
+    dendrogram = shc.dendrogram(shc.linkage(X_scaled, method='ward'), truncate_mode='level', p=10)
+    plt.xlabel('Veri Noktaları (Özetlenmiş)', fontsize=12)
+    plt.ylabel('Öklid Mesafesi (Uzaklık)', fontsize=12)
+    plt.axhline(y=45, color='r', linestyle='--', label=f'Kesim Çizgisi (K={OPTIMUM_K})')
+    plt.legend()
+    plt.show()
+
+    # 🟢 SABİT PARAMETRE: Ward + Euclidean, K=5
+    hierarchical = AgglomerativeClustering(n_clusters=OPTIMUM_K, metric='euclidean', linkage='ward')
+    clusters_hierarchical = hierarchical.fit_predict(X_scaled)
+
+    # =========================================================================
+    # YÖNTEM 3: DBSCAN (SABİT PARAMETRELİ) 🟢 HPO KALDIRILDI
+    # =========================================================================
+    print("\n🚀 YÖNTEM 3: DBSCAN Sabit Parametrelerle Uygulanıyor...")
+
+    # 🟢 SABİT PARAMETRE: eps=2.5, min_samples=5
+    best_eps = 2.5
+    best_min_samples = 5
+
+    db = DBSCAN(eps=best_eps, min_samples=best_min_samples, metric='euclidean')
+    clusters_dbscan = db.fit_predict(X_scaled)
+
+    n_clusters_db = len(set(clusters_dbscan)) - (1 if -1 in clusters_dbscan else 0)
+    n_noise_db = list(clusters_dbscan).count(-1)
+    print(f"📌 DBSCAN Sonucu (eps={best_eps}, min_s={best_min_samples}): {n_clusters_db} farklı küme bulundu, {n_noise_db} adet gürültü tespit edildi.")
+
+    # =========================================================================
+    # SİLOUHETTE SKORU (İÇSEL DOĞRULAMA)
+    # =========================================================================
+    print("\n─── İÇSEL DOĞRULAMA: Silhouette Skoru Kıyaslaması ───")
+
+    pca_2d = PCA(n_components=2, random_state=42)
+    X_pca = pca_2d.fit_transform(X_scaled)
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+    # Üç modelin etiketlerini sözlükte tutuyoruz
+    model_labels_dict = {
+        "K-Means": clusters_kmeans,
+        "Hiyerarşik": clusters_hierarchical,
+        "DBSCAN": clusters_dbscan
+    }
+
+    scores = []
+
+    for i, (name, cluster_labels) in enumerate(model_labels_dict.items()):
+        if len(set(cluster_labels)) > 1:
+            score = silhouette_score(X_scaled, cluster_labels)
+        else:
+            score = 0.0
+
+        inertia_val = final_inertia if name == "K-Means" else "-"
+        scores.append({'Model': name, 'Silhouette Skoru': score, 'Inertia (K-Means)': inertia_val})
+
+        sns.scatterplot(x=X_pca[:, 0], y=X_pca[:, 1], hue=cluster_labels, palette='tab10', ax=axes[i], s=50, alpha=0.7)
+        axes[i].set_title(f"{name} Kümeleri\nSilhouette: {score:.3f}", fontweight='bold', color=CUSTOM_PALETTE[0])
+        axes[i].set_xlabel('PCA Bileşeni 1')
+        axes[i].set_ylabel('PCA Bileşeni 2')
+
+    plt.suptitle('PCA İle 2 Boyutlu Uzayda Küme Yapılarının Karşılaştırılması', fontsize=15, fontweight='bold', y=1.05)
+    plt.tight_layout()
+    plt.show()
+
+    # =========================================================================
+    # DIŞSAL (İSTATİSTİKSEL) DOĞRULAMA: 3 MODEL İÇİN KARŞILAŞTIRMALI ANOVA TESTİ
+    # =========================================================================
+    print("\n🚀 KÜMELERİN İSTATİSTİKSEL DOĞRULANMASI (Tüm Modeller İçin ANOVA)...")
+
+    anova_results = []
+
+    for i, col in enumerate(feature_cols):
+        row_data = {'Özellik (Feature)': col}
+
+        # Her bir özellik için 3 modeli döngüye sokuyoruz
+        for model_name, labels in model_labels_dict.items():
+            # DBSCAN'deki gürültüleri (-1) ANOVA testine dahil etmiyoruz
+            valid_clusters = [c for c in set(labels) if c != -1]
+
+            # ANOVA F-Testi için en az 2 geçerli küme olmalı
+            if len(valid_clusters) >= 2:
+                cluster_groups = [X_scaled[labels == k, i] for k in valid_clusters]
+                f_stat, p_val = stats.f_oneway(*cluster_groups)
+
+                row_data[f'{model_name} F-Skoru'] = round(f_stat, 2)
+                row_data[f'{model_name} Anlamlı?'] = '✅' if p_val < 0.05 else '❌'
+            else:
+                row_data[f'{model_name} F-Skoru'] = 0.0
+                row_data[f'{model_name} Anlamlı?'] = '⚠️ Yetersiz Küme'
+
+        anova_results.append(row_data)
+
+    df_anova = pd.DataFrame(anova_results)
+
+    # Tabloyu K-Means F-Skoruna göre azalan şekilde sıralayalım (Kıyaslaması kolay olsun)
+    df_anova = df_anova.sort_values(by='K-Means F-Skoru', ascending=False)
+
+    print("\n─── 🏆 ANOVA F-Testi Karşılaştırma Tablosu ───")
+    print("Not: '✅' P-Değeri < 0.05 olduğunu ve özelliğin istatistiksel olarak kümeleri başarıyla ayırdığını gösterir.")
+
+    display(df_anova.style
+            .applymap(lambda v: f'background-color: {CUSTOM_PALETTE[5]}; color: white; font-weight: bold;' if v == '✅' else '', subset=['K-Means Anlamlı?', 'Hiyerarşik Anlamlı?', 'DBSCAN Anlamlı?'])
+            .applymap(lambda v: 'background-color: #ffe6e6; color: black;' if v == '❌' else '')
+            .set_caption('3 Kümeleme Algoritması İçin Özellik Varyans Analizi (F-Skorları)')
+            .set_table_styles([{'selector': 'th', 'props': [('background-color', CUSTOM_PALETTE[0]), ('color', 'white')]}]))
+
+except FileNotFoundError:
+    print("❌ Hata: Dosya belirtilen yolda bulunamadı. Lütfen yolu kontrol edin.")
+except Exception as e:
+    print(f"❌ Bir hata oluştu: {e}")
